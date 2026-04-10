@@ -16,7 +16,7 @@ def get_env_var(name: str, default: str = "") -> str:
 
 API_BASE_URL = get_env_var("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
-API_KEY = os.environ.get("API_KEY")
+API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
 ENV_SERVER_URL = get_env_var("ENV_SERVER_URL", "http://127.0.0.1:7860")
 
 BENCHMARK = "medtriage-er-simulator"
