@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
-from src.medtriage.models import Action, ActionType, BedStatus, BedType, Observation, PatientSummary, Reward, Vitals
+from models import Action, ActionType, BedStatus, BedType, Observation, PatientSummary, Reward, Vitals
 
 
 VITALS_OVERRIDE = {

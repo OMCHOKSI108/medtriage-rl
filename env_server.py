@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 
-from src.medtriage.models import Reward, StateResponse, StepRequest, StepResponse
+from models import Reward, StateResponse, StepRequest, StepResponse
 from src.medtriage.sim import MedTriageSim
 
 app = FastAPI(title="MedTriage ER Simulator")
@@ -207,11 +207,11 @@ def index() -> str:
                                 <div class="vitals">HR: ${p.vitals.heart_rate} | RR: ${p.vitals.respiratory_rate} | SpO2: ${p.vitals.spo2}%</div>
                             </div>
                             <div style="text-align: right; display: flex; flex-direction: column; gap: 0.5rem;">
-                                \${state.active_alarms.includes(p.patient_id) ? '<span class="badge badge-active">Critical Alarm</span>' : ''}
+                                ${state.active_alarms.includes(p.patient_id) ? '<span class="badge badge-active">Critical Alarm</span>' : ''}
                                 <div style="display: flex; gap: 0.5rem;">
-                                    <button onclick="triage('\${p.patient_id}', 1)" style="padding: 0.25rem 0.5rem; background: var(--danger); font-size: 0.75rem;">ESI 1</button>
-                                    <button onclick="triage('\${p.patient_id}', 2)" style="padding: 0.25rem 0.5rem; background: var(--warning); color: black; font-size: 0.75rem;">ESI 2</button>
-                                    <button onclick="allocate('\${p.patient_id}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Bed</button>
+                                    <button onclick="triage('${p.patient_id}', 1)" style="padding: 0.25rem 0.5rem; background: var(--danger); font-size: 0.75rem;">ESI 1</button>
+                                    <button onclick="triage('${p.patient_id}', 2)" style="padding: 0.25rem 0.5rem; background: var(--warning); color: black; font-size: 0.75rem;">ESI 2</button>
+                                    <button onclick="allocate('${p.patient_id}')" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;">Bed</button>
                                 </div>
                             </div>
                         </div>
@@ -226,7 +226,7 @@ def index() -> str:
             }
 
             async function triage(patientId, level) {
-                log(`Triaging \${patientId} as ESI \${level}...`);
+                log(`Triaging ${patientId} as ESI ${level}...`);
                 await fetch('/step', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
@@ -236,7 +236,7 @@ def index() -> str:
             }
 
             async function allocate(patientId) {
-                log(`Attempting bed allocation for \${patientId}...`);
+                log(`Attempting bed allocation for ${patientId}...`);
                 const res = await fetch('/state');
                 const data = await res.json();
                 const beds = data.state.bed_status;
@@ -260,7 +260,7 @@ def index() -> str:
 
             function log(msg) {
                 const logs = document.getElementById('logs');
-                logs.innerHTML += `<div>> \${msg}</div>`;
+                logs.innerHTML += `<div>> ${msg}</div>`;
                 logs.scrollTop = logs.scrollHeight;
             }
 
