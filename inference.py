@@ -14,9 +14,13 @@ def get_env_var(name: str, default: str = "") -> str:
         return default
     return val.strip()
 
-ENV_SERVER_URL = get_env_var("ENV_SERVER_URL", "http://127.0.0.1:7860")
-MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
+# Strictly following the sample inference.py from the checklist
+API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
+# Internal Config
+ENV_SERVER_URL = os.getenv("ENV_SERVER_URL", "http://127.0.0.1:7860")
 BENCHMARK = "medtriage-er-simulator"
 MAX_STEPS = 12
 MAX_TOTAL_REWARD = 1.0
@@ -44,8 +48,8 @@ def log_step(step: int, action: Dict[str, Any], reward: float, done: bool, error
     )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    _emit("END", {"success": success, "steps": steps, "score": score, "rewards": rewards})
+def log_end(task: str, success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    _emit("END", {"task": task, "success": success, "steps": steps, "score": score, "rewards": rewards})
 
 
 def _clamp_score(score: float) -> float:
@@ -155,23 +159,17 @@ def _run_task(task_id: str, client: OpenAI) -> float:
     score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
     score = _clamp_score(score)
     success = score >= SUCCESS_SCORE_THRESHOLD
-    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+    log_end(task=task_id, success=success, steps=steps_taken, score=score, rewards=rewards)
     return score
 
-def _get_api_config() -> tuple[str, str]:
-    """Retrieves and cleans API configuration from environment variables."""
-    # Ensure BASE_URL starts with http:// if it exists
-    base = get_env_var("API_BASE_URL", "https://api.openai.com/v1")
-    if base and not base.startswith("http"):
-        base = f"http://{base}"
-    
-    # Resolve API_KEY from multiple possible sources
-    key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY") or "sk-ignored"
-    
-    return base, key
-
 def main() -> None:
-    base_url, api_key = _get_api_config()
+    # Resolve and repair URL protocol if needed
+    base_url = API_BASE_URL
+    if base_url and not base_url.startswith("http"):
+        base_url = f"http://{base_url}"
+    
+    # Resolve API Key (supporting checklist name HF_TOKEN)
+    api_key = HF_TOKEN or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or "sk-ignored"
 
     # Create client with protocol-validated URL
     client = None
@@ -201,7 +199,6 @@ def main() -> None:
         try:
             _run_task(task_id, client)
         except Exception:
-            # Prevent single task failure from crashing main loop
             pass
 
 if __name__ == "__main__":
