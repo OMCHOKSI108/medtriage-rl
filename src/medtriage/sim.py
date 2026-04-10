@@ -142,6 +142,9 @@ class MedTriageSim:
         if preventable_deaths > 0:
             reward_value -= 0.5 * preventable_deaths
 
+        # Clamp reward to strictly [0, 1] as per requirements
+        reward_value = max(0.0, min(1.0, reward_value))
+
         info["preventable_deaths"] = preventable_deaths
         components = {
             "triage_progress": 0.02 * triaged,
