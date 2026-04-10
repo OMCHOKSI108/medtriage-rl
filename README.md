@@ -1,3 +1,15 @@
+---
+title: MedTriage RL Simulation
+emoji: 🏥
+colorFrom: red
+colorTo: blue
+sdk: docker
+pinned: false
+app_port: 7860
+tags:
+- openenv
+---
+
 # Project MedTriage (OpenEnv)
 
 This repository is an informational, non-clinical simulation concept for reinforcement learning research. It is not a medical device and provides no medical advice. For medical advice or diagnosis, consult a professional.
