@@ -51,6 +51,14 @@ def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> No
     _emit("END", {"success": success, "steps": steps, "score": score, "rewards": rewards})
 
 
+def _clamp_score(score: float) -> float:
+    if score >= 1.0:
+        return 0.99
+    if score <= 0.0:
+        return 0.01
+    return score
+
+
 def _load_tasks() -> List[Dict[str, Any]]:
     with open("openenv.yaml", "r", encoding="utf-8") as handle:
         payload = yaml.safe_load(handle)
@@ -150,7 +158,7 @@ def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
             break
 
     score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
-    score = min(max(score, 0.0), 1.0)
+    score = _clamp_score(score)
     success = score >= SUCCESS_SCORE_THRESHOLD
     log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
     return score
