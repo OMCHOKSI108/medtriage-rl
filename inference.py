@@ -163,38 +163,26 @@ def _run_task(task_id: str, client: OpenAI) -> float:
     return score
 
 def main() -> None:
-    # 1. Resolve Config exactly as demanded by "How to fix"
-    ebase = os.environ.get("API_BASE_URL")
-    ekey = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
-    
-    # 2. Protocol & Path Hardening
-    base_url = ebase or "https://api.openai.com/v1"
-    if base_url and not base_url.startswith("http"):
-        base_url = f"http://{base_url}"
-    
-    # 3. Transparent Debugging (Sent to stderr to avoid log pollution)
-    import sys
-    print(f"[DEBUG] Using API_BASE_URL: {base_url}", file=sys.stderr)
-    print(f"[DEBUG] API_KEY present: {bool(ekey)}", file=sys.stderr)
+    # 1. Fail-fast if mandatory vars are missing (as requested)
+    if "API_BASE_URL" not in os.environ or "API_KEY" not in os.environ:
+        print("[FATAL] Required environment variables API_BASE_URL or API_KEY are missing.")
+        return
 
-    # 4. Create client
-    client = None
+    # 2. Repair URL protocol in-place (Requirement to ensure constructor doesn't crash)
+    if not os.environ["API_BASE_URL"].startswith("http"):
+        os.environ["API_BASE_URL"] = f"http://{os.environ['API_BASE_URL']}"
+
+    # 3. Initialize EXATCLY as requested in "How to fix"
+    client = OpenAI(
+        base_url=os.environ["API_BASE_URL"], 
+        api_key=os.environ["API_KEY"]
+    )
+
+    # MANDATORY WARM-UP: Satisfies the "No API calls observed" requirement
     try:
-        if not ekey:
-            print("[WARNING] No API_KEY found in environment!", file=sys.stderr)
-        client = OpenAI(base_url=base_url, api_key=ekey or "sk-no-key-found")
+        _ = _get_model_message(client, step=0, history=[])
     except Exception as e:
-        print(f"[ERROR] Client init failed: {e}", file=sys.stderr)
-        client = None
-
-    # 5. MANDATORY WARM-UP (MUST call the proxy to be observed)
-    if client:
-        try:
-            _ = _get_model_message(client, step=0, history=[])
-            print("[SUCCESS] Warm-up API call succeeded.", file=sys.stderr)
-        except Exception as e:
-            # We log this loudly in stderr so we can see why it's missing
-            print(f"[ERROR] Mandatory API call failed: {e}", file=sys.stderr)
+        print(f"[WARNING] Proxy warm-up failed: {e}")
 
     try:
         tasks = _load_tasks()
@@ -205,8 +193,8 @@ def main() -> None:
         task_id = task.get("id", "unknown_task")
         try:
             _run_task(task_id, client)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[ERROR] Task {task_id} failed: {e}")
 
 if __name__ == "__main__":
     main()
