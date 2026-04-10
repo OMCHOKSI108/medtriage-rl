@@ -163,31 +163,38 @@ def _run_task(task_id: str, client: OpenAI) -> float:
     return score
 
 def main() -> None:
-    # Resolve and repair URL protocol if needed
-    base_url = API_BASE_URL
+    # 1. Resolve Config exactly as demanded by "How to fix"
+    ebase = os.environ.get("API_BASE_URL")
+    ekey = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+    
+    # 2. Protocol & Path Hardening
+    base_url = ebase or "https://api.openai.com/v1"
     if base_url and not base_url.startswith("http"):
         base_url = f"http://{base_url}"
     
-    # Resolve API Key (supporting checklist name HF_TOKEN)
-    api_key = HF_TOKEN or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY") or "sk-ignored"
+    # 3. Transparent Debugging (Sent to stderr to avoid log pollution)
+    import sys
+    print(f"[DEBUG] Using API_BASE_URL: {base_url}", file=sys.stderr)
+    print(f"[DEBUG] API_KEY present: {bool(ekey)}", file=sys.stderr)
 
-    # Create client with protocol-validated URL
+    # 4. Create client
     client = None
     try:
-        client = OpenAI(base_url=base_url, api_key=api_key)
-    except Exception:
-        # Emergency fallback to default OpenAI if proxy init failed
-        try:
-            client = OpenAI(api_key=api_key)
-        except Exception:
-            client = None
+        if not ekey:
+            print("[WARNING] No API_KEY found in environment!", file=sys.stderr)
+        client = OpenAI(base_url=base_url, api_key=ekey or "sk-no-key-found")
+    except Exception as e:
+        print(f"[ERROR] Client init failed: {e}", file=sys.stderr)
+        client = None
 
-    # MANDATORY: Make at least one call through the client to register on the proxy.
+    # 5. MANDATORY WARM-UP (MUST call the proxy to be observed)
     if client:
         try:
             _ = _get_model_message(client, step=0, history=[])
-        except Exception:
-            pass
+            print("[SUCCESS] Warm-up API call succeeded.", file=sys.stderr)
+        except Exception as e:
+            # We log this loudly in stderr so we can see why it's missing
+            print(f"[ERROR] Mandatory API call failed: {e}", file=sys.stderr)
 
     try:
         tasks = _load_tasks()
