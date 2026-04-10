@@ -70,54 +70,66 @@ def _get_reward_value(step_payload: Dict[str, Any]) -> float:
     return float(reward or 0.0)
 
 
+import time
+
+def _wait_for_server(max_attempts: int = 20, delay: int = 5) -> bool:
+    """Polls the server /state endpoint until it is ready."""
+    _log("INFO", {"event": "waiting_for_server", "url": ENV_SERVER_URL, "max_wait_sec": max_attempts * delay})
+    for i in range(max_attempts):
+        try:
+            response = requests.get(f"{ENV_SERVER_URL}/state", timeout=5)
+            if response.status_code == 200:
+                _log("SUCCESS", {"event": "server_ready", "attempt": i + 1})
+                return True
+        except Exception:
+            pass
+        _log("INFO", {"event": "server_not_ready_retrying", "attempt": i + 1})
+        time.sleep(delay)
+    return False
+
+def _safe_post(url: str, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
+    """Handles POST requests with robust error catching and JSON validation."""
+    try:
+        response = requests.post(url, json=json_data, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        _log("ERROR", {"event": "web_request_failed", "url": url, "error": str(e)})
+        return {}
+
 def _run_task(task_id: str, client: OpenAI) -> float:
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
-    success = False
-
+    
     _log("START", {"task": task_id, "env": BENCHMARK, "model": MODEL_NAME})
 
-    reset_response = requests.post(f"{ENV_SERVER_URL}/reset", timeout=10)
-    reset_response.raise_for_status()
-    result = reset_response.json()
+    # Polling wait
+    if not _wait_for_server():
+        _log("CRITICAL", {"event": "server_timeout_aborting_task", "task": task_id})
+        return 0.0
+
+    result = _safe_post(f"{ENV_SERVER_URL}/reset")
     last_reward = 0.0
 
     for step in range(1, MAX_STEPS + 1):
-        if result.get("done"):
+        if not result or result.get("done"):
             break
 
         _ = _get_model_message(client, step, history)
         action = _choose_action(result.get("observation", {}))
 
-        step_response = requests.post(
-            f"{ENV_SERVER_URL}/step",
-            json={"action": action},
-            timeout=10,
-        )
-        step_response.raise_for_status()
-        result = step_response.json()
-
-        reward = _get_reward_value(result)
-        done = result.get("done")
-        error = None
+        result = _safe_post(f"{ENV_SERVER_URL}/step", json_data={"action": action})
+        
+        reward = _get_reward_value(result or {})
+        done = (result or {}).get("done", True)
 
         rewards.append(reward)
         steps_taken = step
         last_reward = reward
 
-        _log(
-            "STEP",
-            {
-                "step": step,
-                "action": action,
-                "reward": reward,
-                "done": done,
-                "error": error,
-            },
-        )
-
+        _log("STEP", {"step": step, "action": action, "reward": reward, "done": done})
         history.append(f"Step {step}: reward {last_reward:+.2f}")
 
         if done:
@@ -125,11 +137,8 @@ def _run_task(task_id: str, client: OpenAI) -> float:
 
     score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
     score = min(max(score, 0.0), 1.0)
-    success = score >= SUCCESS_SCORE_THRESHOLD
-
-    _log("END", {"success": success, "steps": steps_taken, "score": score, "rewards": rewards})
+    _log("END", {"task": task_id, "score": score, "steps": steps_taken})
     return score
-
 
 def main() -> None:
     # Diagnostic Logging
@@ -142,8 +151,6 @@ def main() -> None:
     })
 
     api_key = HF_TOKEN or OPENAI_API_KEY or "sk-ignored"
-    
-    # Handle cases where tokens might be literal string "None" or empty
     if not api_key or str(api_key).strip().lower() == "none":
         api_key = "sk-ignored"
 
@@ -151,17 +158,29 @@ def main() -> None:
         client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
     except Exception as e:
         _log("ERROR", {"event": "client_init_failed", "error": str(e)})
-        # Last resort fallback to avoid instant crash
         client = OpenAI(api_key="sk-ignored")
 
-    tasks = _load_tasks()
+    tasks = []
+    try:
+        tasks = _load_tasks()
+    except Exception as e:
+        _log("ERROR", {"event": "tasks_load_failed", "error": str(e)})
+
     scores: List[float] = []
     for task in tasks:
-        task_id = task.get("id", "unknown_task")
-        scores.append(_run_task(task_id, client))
+        try:
+            task_id = task.get("id", "unknown_task")
+            score = _run_task(task_id, client)
+            scores.append(score)
+        except Exception as e:
+            _log("ERROR", {"event": "task_execution_failed", "error": str(e)})
 
-    _log("END", {"success": True, "steps": len(scores), "score": sum(scores) / max(len(scores), 1)})
-
+    final_score = sum(scores) / max(len(scores), 1) if scores else 0.0
+    _log("END_TOTAL", {"success": True, "task_count": len(scores), "avg_score": final_score})
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        _log("FATAL", {"error": str(e), "trace": traceback.format_exc()})
