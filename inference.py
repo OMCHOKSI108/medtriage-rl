@@ -14,9 +14,10 @@ def get_env_var(name: str, default: str = "") -> str:
         return default
     return val.strip()
 
-API_BASE_URL = get_env_var("API_BASE_URL", "https://api.openai.com/v1")
+API_BASE_URL = os.environ["API_BASE_URL"]
 MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
 API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+API_KEY = os.environ["API_KEY"]
 ENV_SERVER_URL = get_env_var("ENV_SERVER_URL", "http://127.0.0.1:7860")
 
 BENCHMARK = "medtriage-er-simulator"
@@ -64,9 +65,7 @@ def _load_tasks() -> List[Dict[str, Any]]:
     return payload.get("tasks", [])
 
 
-def _get_model_message(client: Optional[OpenAI], step: int, history: List[str]) -> str:
-    if client is None:
-        return "triage"
+def _get_model_message(client: OpenAI, step: int, history: List[str]) -> str:
     prompt = "You are a triage assistant. Return a short action plan."
     try:
         completion = client.chat.completions.create(
@@ -122,7 +121,7 @@ def _safe_post(url: str, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
     except Exception:
         return {}
 
-def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
+def _run_task(task_id: str, client: OpenAI) -> float:
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
@@ -163,12 +162,10 @@ def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
     return score
 
 def main() -> None:
-    api_key = API_KEY or ""
-    client = None
-    try:
-        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
-    except BaseException:
-        client = None
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    # Ensure at least one proxy call is made for validation.
+    _ = _get_model_message(client, step=0, history=[])
 
     try:
         tasks = _load_tasks()
