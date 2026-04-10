@@ -6,11 +6,17 @@ import requests
 import yaml
 from openai import OpenAI
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+def get_env_var(name: str, default: str = "") -> str:
+    val = os.environ.get(name)
+    if val is None or val.strip().lower() == "none" or val.strip() == "":
+        return default
+    return val.strip()
+
+API_BASE_URL = get_env_var("API_BASE_URL", "https://api.openai.com/v1")
+MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-ENV_SERVER_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860")
+ENV_SERVER_URL = get_env_var("ENV_SERVER_URL", "http://127.0.0.1:7860")
 
 BENCHMARK = "medtriage-er-simulator"
 MAX_STEPS = 12
@@ -126,8 +132,27 @@ def _run_task(task_id: str, client: OpenAI) -> float:
 
 
 def main() -> None:
+    # Diagnostic Logging
+    _log("DEBUG", {
+        "api_base_url": API_BASE_URL,
+        "model_name": MODEL_NAME,
+        "hf_token_set": bool(HF_TOKEN),
+        "openai_api_key_set": bool(OPENAI_API_KEY),
+        "env_server_url": ENV_SERVER_URL
+    })
+
     api_key = HF_TOKEN or OPENAI_API_KEY or "sk-ignored"
-    client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
+    
+    # Handle cases where tokens might be literal string "None" or empty
+    if not api_key or str(api_key).strip().lower() == "none":
+        api_key = "sk-ignored"
+
+    try:
+        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
+    except Exception as e:
+        _log("ERROR", {"event": "client_init_failed", "error": str(e)})
+        # Last resort fallback to avoid instant crash
+        client = OpenAI(api_key="sk-ignored")
 
     tasks = _load_tasks()
     scores: List[float] = []
