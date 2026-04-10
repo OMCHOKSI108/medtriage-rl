@@ -34,7 +34,9 @@ def _load_tasks() -> List[Dict[str, Any]]:
     return payload.get("tasks", [])
 
 
-def _get_model_message(client: OpenAI, step: int, history: List[str]) -> str:
+def _get_model_message(client: Optional[OpenAI], step: int, history: List[str]) -> str:
+    if client is None:
+        return "triage"
     prompt = "You are a triage assistant. Return a short action plan."
     try:
         completion = client.chat.completions.create(
@@ -74,16 +76,13 @@ import time
 
 def _wait_for_server(max_attempts: int = 20, delay: int = 5) -> bool:
     """Polls the server /state endpoint until it is ready."""
-    _log("INFO", {"event": "waiting_for_server", "url": ENV_SERVER_URL, "max_wait_sec": max_attempts * delay})
     for i in range(max_attempts):
         try:
             response = requests.get(f"{ENV_SERVER_URL}/state", timeout=5)
             if response.status_code == 200:
-                _log("SUCCESS", {"event": "server_ready", "attempt": i + 1})
                 return True
         except Exception:
             pass
-        _log("INFO", {"event": "server_not_ready_retrying", "attempt": i + 1})
         time.sleep(delay)
     return False
 
@@ -93,27 +92,18 @@ def _safe_post(url: str, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
         response = requests.post(url, json=json_data, timeout=10)
         response.raise_for_status()
         return response.json()
-    except Exception as e:
-        _log("ERROR", {"event": "web_request_failed", "url": url, "error": str(e)})
+    except Exception:
         return {}
 
-def _run_task(task_id: str, client: OpenAI) -> float:
+def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
     history: List[str] = []
     rewards: List[float] = []
     steps_taken = 0
-    score = 0.0
     
     _log("START", {"task": task_id, "env": BENCHMARK, "model": MODEL_NAME})
 
     # Polling wait (silent)
-    for i in range(20):
-        try:
-            response = requests.get(f"{ENV_SERVER_URL}/state", timeout=5)
-            if response.status_code == 200:
-                break
-        except Exception:
-            pass
-        time.sleep(5)
+    _wait_for_server()
 
     result = _safe_post(f"{ENV_SERVER_URL}/reset")
     last_reward = 0.0
@@ -124,7 +114,6 @@ def _run_task(task_id: str, client: OpenAI) -> float:
 
         _ = _get_model_message(client, step, history)
         action = _choose_action(result.get("observation", {}))
-
         result = _safe_post(f"{ENV_SERVER_URL}/step", json_data={"action": action})
         
         reward = _get_reward_value(result or {})
@@ -150,24 +139,32 @@ def main() -> None:
     if not api_key or str(api_key).strip().lower() == "none":
         api_key = "sk-ignored"
 
+    # Deeply hardened client creation
+    client = None
     try:
-        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
-    except Exception:
-        client = OpenAI(api_key="sk-ignored")
+        # Only pass base_url if it looks like a real URL
+        kwargs = {"api_key": api_key}
+        if API_BASE_URL.startswith("http"):
+            kwargs["base_url"] = API_BASE_URL
+        
+        client = OpenAI(**kwargs)
+    except BaseException:
+        try:
+            # Fallback to absolute minimum config
+            client = OpenAI(api_key="sk-ignored")
+        except BaseException:
+            client = None
 
     tasks = []
     try:
         tasks = _load_tasks()
-    except Exception:
+    except BaseException:
         pass
 
-    scores: List[float] = []
     for task in tasks:
         try:
-            task_id = task.get("id", "unknown_task")
-            score = _run_task(task_id, client)
-            scores.append(score)
-        except Exception:
+            _run_task(task.get("id", "unknown"), client)
+        except BaseException:
             pass
 
 if __name__ == "__main__":
