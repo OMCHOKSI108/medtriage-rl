@@ -1,0 +1,1 @@
+"""MedTriage ER simulator package."""

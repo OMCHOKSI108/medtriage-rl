@@ -1,0 +1,21 @@
+[project]
+name = "medtriage-rl"
+version = "0.1.0"
+description = "MedTriage OpenEnv environment"
+requires-python = ">=3.10"
+dependencies = [
+	"fastapi>=0.104.0",
+	"openai>=1.30.0",
+	"openenv-core>=0.2.0",
+	"pydantic>=2.0.0",
+	"pyyaml>=6.0",
+	"requests>=2.25.0",
+	"uvicorn>=0.24.0",
+]
+
+[project.scripts]
+server = "server.app:main"
+
+[tool.openenv]
+name = "medtriage-er-simulator"
+entry = "server.app:app"

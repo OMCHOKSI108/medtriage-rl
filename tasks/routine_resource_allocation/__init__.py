@@ -1,0 +1,1 @@
+"""Routine resource allocation task."""

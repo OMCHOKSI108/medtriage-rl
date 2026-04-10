@@ -1,0 +1,1 @@
+"""Mass casualty surge task."""
