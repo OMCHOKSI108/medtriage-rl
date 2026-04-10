@@ -16,8 +16,7 @@ def get_env_var(name: str, default: str = "") -> str:
 
 API_BASE_URL = get_env_var("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.environ.get("HF_TOKEN")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+API_KEY = os.environ.get("API_KEY")
 ENV_SERVER_URL = get_env_var("ENV_SERVER_URL", "http://127.0.0.1:7860")
 
 BENCHMARK = "medtriage-er-simulator"
@@ -164,25 +163,12 @@ def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
     return score
 
 def main() -> None:
-    api_key = HF_TOKEN or OPENAI_API_KEY or "sk-ignored"
-    if not api_key or str(api_key).strip().lower() == "none":
-        api_key = "sk-ignored"
-
-    # Deeply hardened client creation
+    api_key = API_KEY or ""
     client = None
     try:
-        # Only pass base_url if it looks like a real URL
-        kwargs = {"api_key": api_key}
-        if API_BASE_URL.startswith("http"):
-            kwargs["base_url"] = API_BASE_URL
-        
-        client = OpenAI(**kwargs)
+        client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
     except BaseException:
-        try:
-            # Fallback to absolute minimum config
-            client = OpenAI(api_key="sk-ignored")
-        except BaseException:
-            client = None
+        client = None
 
     try:
         tasks = _load_tasks()
