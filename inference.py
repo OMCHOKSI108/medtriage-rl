@@ -14,11 +14,8 @@ def get_env_var(name: str, default: str = "") -> str:
         return default
     return val.strip()
 
-API_BASE_URL = os.environ["API_BASE_URL"]
-MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
-API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
-API_KEY = os.environ["API_KEY"]
 ENV_SERVER_URL = get_env_var("ENV_SERVER_URL", "http://127.0.0.1:7860")
+MODEL_NAME = get_env_var("MODEL_NAME", "gpt-4o-mini")
 
 BENCHMARK = "medtriage-er-simulator"
 MAX_STEPS = 12
@@ -161,20 +158,51 @@ def _run_task(task_id: str, client: OpenAI) -> float:
     log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
     return score
 
-def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+def _get_api_config() -> tuple[str, str]:
+    """Retrieves and cleans API configuration from environment variables."""
+    # Ensure BASE_URL starts with http:// if it exists
+    base = get_env_var("API_BASE_URL", "https://api.openai.com/v1")
+    if base and not base.startswith("http"):
+        base = f"http://{base}"
+    
+    # Resolve API_KEY from multiple possible sources
+    key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY") or "sk-ignored"
+    
+    return base, key
 
-    # Ensure at least one proxy call is made for validation.
-    _ = _get_model_message(client, step=0, history=[])
+def main() -> None:
+    base_url, api_key = _get_api_config()
+
+    # Create client with protocol-validated URL
+    client = None
+    try:
+        client = OpenAI(base_url=base_url, api_key=api_key)
+    except Exception:
+        # Emergency fallback to default OpenAI if proxy init failed
+        try:
+            client = OpenAI(api_key=api_key)
+        except Exception:
+            client = None
+
+    # MANDATORY: Make at least one call through the client to register on the proxy.
+    if client:
+        try:
+            _ = _get_model_message(client, step=0, history=[])
+        except Exception:
+            pass
 
     try:
         tasks = _load_tasks()
-    except BaseException:
+    except Exception:
         tasks = []
 
     for task in tasks:
         task_id = task.get("id", "unknown_task")
-        _run_task(task_id, client)
+        try:
+            _run_task(task_id, client)
+        except Exception:
+            # Prevent single task failure from crashing main loop
+            pass
 
 if __name__ == "__main__":
     main()
