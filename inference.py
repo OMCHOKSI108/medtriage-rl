@@ -10,7 +10,7 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
 HF_TOKEN = os.environ.get("HF_TOKEN")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-ENV_SERVER_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:8000")
+ENV_SERVER_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860")
 
 BENCHMARK = "medtriage-er-simulator"
 MAX_STEPS = 12

@@ -106,7 +106,7 @@ See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
 1. Install dependencies:
    - `pip install -r requirements.txt`
 2. Start the server:
-   - `python -m uvicorn env_server:app --reload`
+    - `python -m uvicorn env_server:app --reload --port 7860`
 
 ## Test Inference Client
 - `python inference.py`
@@ -114,7 +114,7 @@ See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
 The inference client reads `API_BASE_URL`, `MODEL_NAME`, and `HF_TOKEN` from the environment
 and emits structured logs in the `[START]`, `[STEP]`, `[END]` format.
 
-It also supports `OPENAI_API_KEY` and `ENV_SERVER_URL` for local testing.
+It also supports `OPENAI_API_KEY` and `ENV_SERVER_URL` (default: http://127.0.0.1:7860) for local testing.
 
 ## OpenEnv Validation
 Install `openenv-core`, then run:
