@@ -105,10 +105,15 @@ def _run_task(task_id: str, client: OpenAI) -> float:
     
     _log("START", {"task": task_id, "env": BENCHMARK, "model": MODEL_NAME})
 
-    # Polling wait
-    if not _wait_for_server():
-        _log("CRITICAL", {"event": "server_timeout_aborting_task", "task": task_id})
-        return 0.0
+    # Polling wait (silent)
+    for i in range(20):
+        try:
+            response = requests.get(f"{ENV_SERVER_URL}/state", timeout=5)
+            if response.status_code == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(5)
 
     result = _safe_post(f"{ENV_SERVER_URL}/reset")
     last_reward = 0.0
@@ -141,30 +146,20 @@ def _run_task(task_id: str, client: OpenAI) -> float:
     return score
 
 def main() -> None:
-    # Diagnostic Logging
-    _log("DEBUG", {
-        "api_base_url": API_BASE_URL,
-        "model_name": MODEL_NAME,
-        "hf_token_set": bool(HF_TOKEN),
-        "openai_api_key_set": bool(OPENAI_API_KEY),
-        "env_server_url": ENV_SERVER_URL
-    })
-
     api_key = HF_TOKEN or OPENAI_API_KEY or "sk-ignored"
     if not api_key or str(api_key).strip().lower() == "none":
         api_key = "sk-ignored"
 
     try:
         client = OpenAI(base_url=API_BASE_URL, api_key=api_key)
-    except Exception as e:
-        _log("ERROR", {"event": "client_init_failed", "error": str(e)})
+    except Exception:
         client = OpenAI(api_key="sk-ignored")
 
     tasks = []
     try:
         tasks = _load_tasks()
-    except Exception as e:
-        _log("ERROR", {"event": "tasks_load_failed", "error": str(e)})
+    except Exception:
+        pass
 
     scores: List[float] = []
     for task in tasks:
@@ -172,11 +167,8 @@ def main() -> None:
             task_id = task.get("id", "unknown_task")
             score = _run_task(task_id, client)
             scores.append(score)
-        except Exception as e:
-            _log("ERROR", {"event": "task_execution_failed", "error": str(e)})
-
-    final_score = sum(scores) / max(len(scores), 1) if scores else 0.0
-    _log("END_TOTAL", {"success": True, "task_count": len(scores), "avg_score": final_score})
+        except Exception:
+            pass
 
 if __name__ == "__main__":
     try:

@@ -17,13 +17,14 @@ _sim = MedTriageSim()
 
 
 @app.post("/reset", response_model=StepResponse)
-def reset() -> StepResponse:
+def reset(request: Request) -> StepResponse:
+    # Accept Request to handle curl -d '{}' but ignore body
     observation = _sim.reset()
     return StepResponse(
         observation=observation,
         reward=Reward(value=0.0, components={"reset": 0.0}),
         done=False,
-        info={"note": "reset"},
+        info={"status": "initialized"},
     )
 
 
