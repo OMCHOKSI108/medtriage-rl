@@ -1,10 +1,12 @@
 import json
 import os
-from typing import Any, Dict, List
+import time
+from typing import Any, Dict, List, Optional
 
 import requests
 import yaml
 from openai import OpenAI
+
 
 def get_env_var(name: str, default: str = "") -> str:
     val = os.environ.get(name)
@@ -24,8 +26,29 @@ MAX_TOTAL_REWARD = 1.0
 SUCCESS_SCORE_THRESHOLD = 0.6
 
 
-def _log(tag: str, payload: Dict[str, Any]) -> None:
-    print(f"[{tag}] {json.dumps(payload, sort_keys=True)}")
+def _emit(tag: str, payload: Dict[str, Any]) -> None:
+    print(f"[{tag}] {json.dumps(payload)}", flush=True)
+
+
+def log_start(task: str, env: str, model: str) -> None:
+    _emit("START", {"task": task, "env": env, "model": model})
+
+
+def log_step(step: int, action: Dict[str, Any], reward: float, done: bool, error: str | None) -> None:
+    _emit(
+        "STEP",
+        {
+            "step": step,
+            "action": action,
+            "reward": reward,
+            "done": done,
+            "error": error,
+        },
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
+    _emit("END", {"success": success, "steps": steps, "score": score, "rewards": rewards})
 
 
 def _load_tasks() -> List[Dict[str, Any]]:
@@ -48,8 +71,7 @@ def _get_model_message(client: Optional[OpenAI], step: int, history: List[str]) 
         )
         text = (completion.choices[0].message.content or "").strip()
         return text if text else "triage"
-    except Exception as exc:
-        _log("STEP", {"event": "model_error", "error": str(exc)})
+    except Exception:
         return "triage"
 
 
@@ -71,8 +93,6 @@ def _get_reward_value(step_payload: Dict[str, Any]) -> float:
         return float(reward.get("value", 0.0))
     return float(reward or 0.0)
 
-
-import time
 
 def _wait_for_server(max_attempts: int = 20, delay: int = 5) -> bool:
     """Polls the server /state endpoint until it is ready."""
@@ -100,7 +120,7 @@ def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
     rewards: List[float] = []
     steps_taken = 0
     
-    _log("START", {"task": task_id, "env": BENCHMARK, "model": MODEL_NAME})
+    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
 
     # Polling wait (silent)
     _wait_for_server()
@@ -123,7 +143,7 @@ def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
         steps_taken = step
         last_reward = reward
 
-        _log("STEP", {"step": step, "action": action, "reward": reward, "done": done})
+        log_step(step=step, action=action, reward=reward, done=bool(done), error=None)
         history.append(f"Step {step}: reward {last_reward:+.2f}")
 
         if done:
@@ -131,7 +151,8 @@ def _run_task(task_id: str, client: Optional[OpenAI]) -> float:
 
     score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
     score = min(max(score, 0.0), 1.0)
-    _log("END", {"task": task_id, "score": score, "steps": steps_taken})
+    success = score >= SUCCESS_SCORE_THRESHOLD
+    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
     return score
 
 def main() -> None:
@@ -155,21 +176,14 @@ def main() -> None:
         except BaseException:
             client = None
 
-    tasks = []
     try:
         tasks = _load_tasks()
     except BaseException:
-        pass
+        tasks = []
 
     for task in tasks:
-        try:
-            _run_task(task.get("id", "unknown"), client)
-        except BaseException:
-            pass
+        task_id = task.get("id", "unknown_task")
+        _run_task(task_id, client)
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception as e:
-        import traceback
-        _log("FATAL", {"error": str(e), "trace": traceback.format_exc()})
+    main()
