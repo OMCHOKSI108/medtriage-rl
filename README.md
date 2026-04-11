@@ -116,7 +116,7 @@ Scores below are approximate. Run with seed=42 for deterministic episodes.
 
 ```bash
 export API_BASE_URL=<injected-litellm-proxy-url>
-export API_KEY=<your-key>
+export HF_TOKEN=<your-key>
 export MODEL_NAME=gpt-4o-mini
 python inference.py
 ```
@@ -127,8 +127,8 @@ python inference.py
    - `docker run -p 7860:7860 medtriage`
 2. **Hugging Face Space**:
    - Tag your Space with `openenv`
-   - For judged submissions, do not hardcode or manually override `API_BASE_URL` / `API_KEY` with your own provider values in Space settings. The evaluator injects those at runtime.
-   - If you test manually, use `API_KEY` (or `HF_TOKEN` as a local fallback), not `OPENAI_API_KEY`.
+   - For judged submissions, do not hardcode or manually override `API_BASE_URL` / `HF_TOKEN` with your own provider values in Space settings. The evaluator injects those at runtime.
+   - Delete any stale `API_KEY` or `OPENAI_API_KEY` Space secrets so your run cannot silently use your own provider credentials instead of the evaluator proxy.
 
 ## OpenEnv Validation
 The environment is fully compliant with the OpenEnv specification.

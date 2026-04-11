@@ -25,9 +25,8 @@ except Exception as _import_err:
 # CONFIGURATION 
 # ===========================================================================
 
-API_BASE_URL = ""
-API_KEY = ""
-API_KEY_SOURCE = ""
+API_BASE_URL = "https://api.openai.com/v1"
+HF_TOKEN = ""
 ENV_BASE_URL = "http://127.0.0.1:7860"
 MODEL_NAME = "gpt-4o-mini"
 
@@ -57,14 +56,13 @@ TASK_MAX_STEPS = {
 
 def load_runtime_config() -> None:
     """Resolve runtime configuration from the active process environment."""
-    global API_BASE_URL, API_KEY, API_KEY_SOURCE, ENV_BASE_URL, MODEL_NAME
+    global API_BASE_URL, HF_TOKEN, ENV_BASE_URL, MODEL_NAME
 
-    API_BASE_URL = (os.getenv("API_BASE_URL") or "").strip()
-
-    api_key = (os.getenv("API_KEY") or "").strip()
-    hf_token = (os.getenv("HF_TOKEN") or "").strip()
-    API_KEY = api_key or hf_token
-    API_KEY_SOURCE = "API_KEY" if api_key else ("HF_TOKEN" if hf_token else "")
+    API_BASE_URL = (
+        os.getenv("API_BASE_URL")
+        or "https://api.openai.com/v1"
+    ).strip()
+    HF_TOKEN = (os.getenv("HF_TOKEN") or "").strip()
 
     ENV_BASE_URL = (
         os.getenv("ENV_BASE_URL")
@@ -381,10 +379,8 @@ async def main() -> None:
         return
 
     missing_vars = []
-    if not API_BASE_URL:
-        missing_vars.append("API_BASE_URL")
-    if not API_KEY:
-        missing_vars.append("API_KEY")
+    if not HF_TOKEN:
+        missing_vars.append("HF_TOKEN")
 
     if missing_vars:
         err = f"Missing required env vars: {', '.join(missing_vars)}"
@@ -396,11 +392,15 @@ async def main() -> None:
         return
 
     print(f"[INFO] API_BASE_URL = {API_BASE_URL!r}", flush=True)
-    print(f"[INFO] API_KEY_SOURCE = {API_KEY_SOURCE or 'missing'!r}", flush=True)
+    print(f"[INFO] HF_TOKEN_PRESENT = {str(bool(HF_TOKEN)).lower()}", flush=True)
     print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}", flush=True)
     print(f"[INFO] ENV_BASE_URL = {ENV_BASE_URL!r}", flush=True)
-    if API_KEY_SOURCE == "HF_TOKEN":
-        print("[INFO] Falling back to HF_TOKEN because API_KEY is not set.", flush=True)
+    if API_BASE_URL.startswith("https://api.openai.com") or API_BASE_URL.startswith("https://router.huggingface.co"):
+        print(
+            "[WARNING] API_BASE_URL points to a public endpoint. "
+            "For judged submissions this usually means the evaluator proxy env var is being overridden.",
+            flush=True,
+        )
 
     print("[INFO] Waiting for env server...", flush=True)
     if not wait_for_server(ENV_BASE_URL):
@@ -416,7 +416,7 @@ async def main() -> None:
     try:
         llm_client = OpenAI(
             base_url=API_BASE_URL, 
-            api_key=API_KEY,
+            api_key=HF_TOKEN,
             timeout=REQUEST_TIMEOUT_SECONDS,
             max_retries=REQUEST_MAX_RETRIES,
         )

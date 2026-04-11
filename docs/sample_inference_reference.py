@@ -5,13 +5,12 @@ MANDATORY
 - Before submitting, ensure the following variables are defined in your environment configuration:
     API_BASE_URL   The API endpoint for the LLM.
     MODEL_NAME     The model identifier to use for inference.
-    API_KEY        The primary API key used for judged submissions.
-    HF_TOKEN       Optional local fallback when API_KEY is not present.
+    HF_TOKEN       The Hugging Face / evaluator API key used for judged submissions.
     LOCAL_IMAGE_NAME The name of the local image to use for the environment if you are using from_docker_image()
                      method
 
 - Do not hardcode a provider endpoint for judged submissions.
-    The evaluator injects API_BASE_URL and API_KEY at runtime.
+    The evaluator injects API_BASE_URL and HF_TOKEN at runtime.
     MODEL_NAME may still have a local default if needed.
     
 - The inference script must be named `inference.py` and placed in the root directory of the project
@@ -51,7 +50,7 @@ from openai import OpenAI
 
 from my_env_v4 import MyEnvV4Action, MyEnvV4Env
 IMAGE_NAME = os.getenv("IMAGE_NAME") # If you are using docker image 
-API_KEY = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 API_BASE_URL = os.getenv("API_BASE_URL")
 MODEL_NAME = os.getenv("MODEL_NAME") or "Qwen/Qwen2.5-72B-Instruct"
@@ -130,7 +129,7 @@ def get_model_message(client: OpenAI, step: int, last_echoed: str, last_reward: 
 
 
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client = OpenAI(base_url=API_BASE_URL, api_key=HF_TOKEN)
 
     env = await MyEnvV4Env.from_docker_image(IMAGE_NAME)
 
