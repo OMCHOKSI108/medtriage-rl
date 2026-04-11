@@ -26,7 +26,11 @@ except Exception as _import_err:
 # ===========================================================================
 
 API_BASE_URL = os.environ["API_BASE_URL"]
-API_KEY      = os.environ["API_KEY"]
+API_KEY = os.environ.get("API_KEY")
+if not API_KEY:
+    API_KEY = os.environ.get("HF_TOKEN")
+    if API_KEY:
+        print("[WARN] API_KEY not set, falling back to HF_TOKEN", flush=True)
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860").strip()
 

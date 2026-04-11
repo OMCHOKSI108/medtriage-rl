@@ -115,7 +115,7 @@ Scores below are approximate. Run with seed=42 for deterministic episodes.
 ### Reproducing baseline
 
 ```bash
-export API_BASE_URL=https://api.openai.com/v1
+export API_BASE_URL=<injected-litellm-proxy-url>
 export API_KEY=<your-key>
 export MODEL_NAME=gpt-4o-mini
 python inference.py
