@@ -14,7 +14,7 @@ class MedTriageClient(EnvClient):
     """
 
     def reset(self, **kwargs: Any) -> Observation:
-        response = self._session.post(f"{self.base_url}/reset")
+        response = self._session.post(f"{self.base_url}/reset", json=kwargs or {})
         response.raise_for_status()
         data = StepResponse.model_validate(response.json())
         return data.observation

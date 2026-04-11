@@ -442,5 +442,6 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         pass
-    except BaseException:
-        pass
+    except Exception as exc:
+        print(f"[ERROR] Unhandled inference failure: {exc}", flush=True)
+        raise
