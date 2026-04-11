@@ -25,22 +25,11 @@ except Exception as _import_err:
 # CONFIGURATION 
 # ===========================================================================
 
-# FIX 1: Safely format the injected API_BASE_URL for the OpenAI SDK
-raw_url = os.environ["API_BASE_URL"].strip()
-if not raw_url.startswith("http"):
-    raw_url = f"http://{raw_url}"
-if not raw_url.endswith("/v1") and not raw_url.endswith("/v1/"):
-    raw_url = f"{raw_url.rstrip('/')}/v1"
-API_BASE_URL = raw_url
-
-API_KEY = os.environ.get("API_KEY")
-if not API_KEY:
-    API_KEY = os.environ.get("HF_TOKEN")
-    if API_KEY:
-        print("[WARN] API_KEY not set, falling back to HF_TOKEN", flush=True)
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+API_KEY = os.environ.get("HF_TOKEN") or os.environ.get("API_KEY")
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", os.environ.get("API_BASE_URL", "http://127.0.0.1:7860"))
 
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
-ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860").strip()
 
 BENCHMARK_NAME          = "medtriage-er-simulator"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
