@@ -25,8 +25,9 @@ except Exception as _import_err:
 # CONFIGURATION 
 # ===========================================================================
 
-API_BASE_URL = "https://api.openai.com/v1"
-API_KEY = ""
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
+LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL") or API_BASE_URL
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
 ENV_BASE_URL = "http://127.0.0.1:7860"
 MODEL_NAME = "gpt-4o-mini"  # Reliable model with good performance, use gpt-5.4 if available
 
@@ -56,15 +57,22 @@ TASK_MAX_STEPS = {
 
 def load_runtime_config() -> None:
     """Resolve runtime configuration from the active process environment."""
-    global API_BASE_URL, API_KEY, ENV_BASE_URL, MODEL_NAME
+    global API_BASE_URL, LLM_API_BASE_URL, API_KEY, ENV_BASE_URL, MODEL_NAME
 
-    API_BASE_URL = os.getenv("API_BASE_URL")
-    if not API_BASE_URL:
-        raise ValueError("API_BASE_URL environment variable is required for competition submissions")
-
-    API_KEY = os.getenv("API_KEY")
+    # API_BASE_URL and API_KEY are already initialized with proper defaults above
+    # Update them if environment variables are set
+    if os.getenv("API_BASE_URL"):
+        API_BASE_URL = os.getenv("API_BASE_URL")
+    if os.getenv("LLM_API_BASE_URL"):
+        LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL")
+    else:
+        LLM_API_BASE_URL = API_BASE_URL
+    if os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY"):
+        API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+    
+    # Ensure we have an API key
     if not API_KEY:
-        raise ValueError("API_KEY environment variable is required for competition submissions")
+        raise ValueError("HF_TOKEN or OPENAI_API_KEY environment variable is required for competition submissions")
 
     ENV_BASE_URL = (
         os.getenv("ENV_BASE_URL")
@@ -406,6 +414,7 @@ async def main() -> None:
         return
 
     print(f"[INFO] API_BASE_URL = {API_BASE_URL!r}", flush=True)
+    print(f"[INFO] LLM_API_BASE_URL = {LLM_API_BASE_URL!r}", flush=True)
     print(f"[INFO] API_KEY_PRESENT = {str(bool(API_KEY)).lower()}", flush=True)
     print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}", flush=True)
     print(f"[INFO] ENV_BASE_URL = {ENV_BASE_URL!r}", flush=True)
@@ -423,7 +432,7 @@ async def main() -> None:
 
     try:
         llm_client = OpenAI(
-            base_url=API_BASE_URL, 
+            base_url=LLM_API_BASE_URL, 
             api_key=API_KEY,
             timeout=REQUEST_TIMEOUT_SECONDS,
             max_retries=REQUEST_MAX_RETRIES,
