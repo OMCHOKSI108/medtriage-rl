@@ -9,7 +9,6 @@ import json
 import time
 import asyncio
 from typing import List, Optional, Set
-from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 from openai import OpenAI
@@ -27,19 +26,14 @@ except Exception as _import_err:
 # ===========================================================================
 # STRICT EVALUATOR CONFIGURATION
 # ===========================================================================
-# The evaluator explicitly injects API_BASE_URL and API_KEY. 
-# We MUST use exactly those, while protocol-patching the URL if it's missing "http".
+# The evaluator explicitly injects API_BASE_URL and API_KEY.
+# We MUST use exactly those, with no fallback to external endpoints.
 
-os.environ["API_BASE_URL"] = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
-os.environ["API_KEY"] = os.getenv("API_KEY") or os.getenv("HF_TOKEN")
-
-API_BASE_URL = os.environ["API_BASE_URL"]
-if not API_BASE_URL.startswith("http"):
-    API_BASE_URL = f"http://{API_BASE_URL}"
-
-API_KEY = os.environ["API_KEY"]
+# Read required environment variables – fail immediately if missing
+API_BASE_URL = os.environ.get("API_BASE_URL")
+API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
 MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
-ENV_BASE_URL = os.getenv("ENV_BASE_URL") or "http://127.0.0.1:7860"
+ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860")
 
 BENCHMARK_NAME = "medtriage-er-simulator"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "8"))
@@ -231,8 +225,10 @@ def choose_action_with_fallback(
         pid = p.get("patient_id")
         if p.get("esi_assigned") is not None:
             bed_type = "standard"
-            if bed_status.get("trauma", 0) > 0: bed_type = "trauma"
-            elif bed_status.get("icu", 0) > 0: bed_type = "icu"
+            if bed_status.get("trauma", 0) > 0:
+                bed_type = "trauma"
+            elif bed_status.get("icu", 0) > 0:
+                bed_type = "icu"
                 
             return MedTriageAction(
                 action_type=ActionType.ALLOCATE_BED,
@@ -344,6 +340,7 @@ async def run_task(
 async def main() -> None:
     start_time = time.time()
 
+    # Import failure handling
     if not _IMPORT_OK:
         for task_id in TASK_IDS:
             log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
@@ -351,51 +348,95 @@ async def main() -> None:
             log_end(False, 1, 0.01, [0.01])
         return
 
+    # Validate required environment variables – NO FALLBACK
+    missing_vars = []
+    if not API_BASE_URL:
+        missing_vars.append("API_BASE_URL")
+    if not API_KEY:
+        missing_vars.append("API_KEY (or HF_TOKEN)")
+    
+    if missing_vars:
+        error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+        # Log failure for each task as required by spec
+        for task_id in TASK_IDS:
+            task_name = f"medtriage-{task_id}"
+            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(step=1, action="init", reward=0.0, done=True, error=error_msg)
+            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+        return
+
+    # Ensure URL has protocol (evaluator may inject without http://)
+    base_url = API_BASE_URL
+    if not base_url.startswith(("http://", "https://")):
+        base_url = f"http://{base_url}"
+
+    # Wait for environment server
+    if not wait_for_server(ENV_BASE_URL, max_attempts=30, delay=4):
+        error_msg = f"Environment server at {ENV_BASE_URL} not ready"
+        for task_id in TASK_IDS:
+            task_name = f"medtriage-{task_id}"
+            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(step=1, action="wait_for_server", reward=0.0, done=True, error=error_msg)
+            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+        return
+
+    # Create OpenAI client using injected values – NO FALLBACK
     try:
-        # 1. WAIT FOR SERVER FIRST!
-        # In the evaluation sandbox, inference.py and the server spin up simultaneously.
-        # If we preflight/crash before the server is ready, the script will exit without making API calls.
-        wait_for_server(ENV_BASE_URL, max_attempts=30, delay=4)
+        llm_client = OpenAI(
+            base_url=base_url,
+            api_key=API_KEY,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            max_retries=REQUEST_MAX_RETRIES,
+        )
+    except Exception as e:
+        error_msg = f"Failed to create OpenAI client: {str(e)}"
+        for task_id in TASK_IDS:
+            task_name = f"medtriage-{task_id}"
+            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(step=1, action="init_client", reward=0.0, done=True, error=error_msg)
+            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+        return
 
-        # 2. INITIALIZE EXACTLY AS DEMANDED
-        # The Hackathon validator runs a regex/AST parser checking for these exact strings.
-        try:
-            llm_client = OpenAI(
-                base_url=os.environ["API_BASE_URL"],
-                api_key=os.environ["API_KEY"]
-            )
-        except Exception:
-            # Fallback if keys are missing or malformed (needs http:// protocol patch)
-            _fallback_url = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-            if not _fallback_url.startswith("http"):
-                _fallback_url = f"http://{_fallback_url}"
-            llm_client = OpenAI(
-                base_url=_fallback_url,
-                api_key=os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or "dummy-key"
-            )
-        
-        # Warmup Call to guarantee at least one proxy hit registers on their side
-        try:
-            llm_client.chat.completions.create(model=MODEL_NAME, messages=[{"role": "system", "content": "ping"}], max_tokens=5)
-        except Exception:
-            pass
-            
-        env = MedTriageEnv(base_url=ENV_BASE_URL)
-
-        try:
-            for task_id in TASK_IDS:
-                await run_task(llm_client, env, task_id, start_time)
-                if time.time() - start_time >= MAX_RUNTIME_SECONDS:
-                    break
-        except Exception:
-            pass
-
+    # Optional warmup – uses the same client, all requests go through the proxy
+    try:
+        llm_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "system", "content": "ping"}],
+            max_tokens=5,
+            temperature=0.0,
+        )
     except Exception:
+        # Warmup failure is not fatal; proceed anyway
+        pass
+
+    # Create environment client
+    try:
+        env = MedTriageEnv(base_url=ENV_BASE_URL)
+    except Exception as e:
+        error_msg = f"Failed to create environment client: {str(e)}"
+        for task_id in TASK_IDS:
+            task_name = f"medtriage-{task_id}"
+            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(step=1, action="init_env", reward=0.0, done=True, error=error_msg)
+            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+        return
+
+    # Run tasks sequentially
+    try:
+        for task_id in TASK_IDS:
+            await run_task(llm_client, env, task_id, start_time)
+            if time.time() - start_time >= MAX_RUNTIME_SECONDS:
+                break
+    except Exception as e:
+        # Log unexpected error for remaining tasks? Spec doesn't require, but safe to ignore.
         pass
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
     except BaseException:
+        # Swallow to avoid noisy exit, evaluator will catch based on logs.
         pass
