@@ -10,160 +10,149 @@ tags:
 - openenv
 ---
 
-# Project MedTriage (OpenEnv)
+# MedTriage ER Simulator (OpenEnv)
 
-This repository is an informational, non-clinical simulation concept for reinforcement learning research. It is not a medical device and provides no medical advice. For medical advice or diagnosis, consult a professional.
+MedTriage is a reinforcement learning environment that models emergency-room triage under constrained resources.
 
-## Concept
-MedTriage simulates an emergency department triage desk where an RL agent receives patient vitals, symptoms, and history, and must:
-- Triage patients using the Emergency Severity Index (ESI) logic
-- Allocate scarce resources (ICU beds, trauma bays, doctors)
-- Prevent avoidable deterioration and deaths
-- Handle sudden mass-casualty surges
+The environment is designed for research and benchmarking, not clinical use. It evaluates whether an agent can make timely, consistent decisions when patient risk, bed capacity, and arrival pressure change over time.
 
-The goal is high-impact multi-constraint optimization under uncertainty, with transparent, programmatic decision rules.
+## Environment Motivation
 
-## ESI Logic (Programmatic)
-The environment uses a strict, deterministic interpretation of ESI as a decision tree:
+Real triage settings require balancing two competing goals:
+- Clinical urgency: critically ill patients must be identified and escalated quickly.
+- Resource stewardship: ICU and trauma capacity is limited and cannot be over-allocated.
 
-1. **ESI 1 (Immediate)**
-   - Requires immediate life-saving intervention (e.g., cardiac arrest, severe trauma)
-   - Must bypass queue and receive a resuscitation/trauma bed immediately
+MedTriage captures this tension through deterministic simulation rules and task-specific graders. The benchmark focuses on policy quality under pressure, especially when deterioration signals are subtle or sudden surges occur.
 
-2. **ESI 2 (Emergency)**
-   - High risk of deterioration
-   - Includes a "vitals override" rule: if patient vitals cross defined bounds, they must be upgraded to ESI 2
-   - Example override: heart rate > 100 bpm, respiratory rate > 20 / min, or SpO2 < 92%
+## Observation Space
 
-3. **ESI 3-5 (Urgent to Minor)**
-   - Determined by predicted resource consumption
-   - More resources -> higher severity (lower ESI number)
+Each environment step returns an observation with the following fields:
 
-## Observation, Action, and State
-**Observation**
-- `waiting_room`: list of masked patient summaries
-- `bed_status`: counts of available ICU, trauma, and standard beds
-- `active_alarms`: patient IDs that triggered critical vitals thresholds
-- `simulation_clock`: integer time step
+| Field | Type | Description |
+|---|---|---|
+| waiting_room | list[PatientSummary] | Queue of current patients and their vitals/metadata |
+| bed_status | object | Available beds by type: icu, trauma, standard |
+| active_alarms | list[str] | Patient IDs currently triggering alarm conditions |
+| simulation_clock | int | Current simulation timestep |
 
-**Action**
-- `triage_patient(patient_id, esi_level)`
-- `allocate_bed(patient_id, bed_type)`
-- `order_vitals_check(patient_id)`
-- `no_op()`
+PatientSummary includes:
+- patient_id
+- age
+- complaint
+- vitals (heart_rate, respiratory_rate, spo2)
+- resources_expected
+- esi_assigned (nullable)
 
-**Internal State**
-- Patient stability score decays if high-acuity patients wait too long
-- Death event occurs when stability falls to 0
-- Step advances `simulation_clock`
+## Action Space
 
-**OpenEnv API**
-- `POST /reset` returns an initial observation
-- `POST /step` advances the simulation and returns reward + done
-- `GET /state` returns the current observation snapshot
+Supported actions:
 
-## Reward and Scoring
-Grader logic is task-specific. A typical score includes:
-- Correct ESI assignments (accuracy)
-- Penalties for preventable deaths
-- Penalties for resource misuse
- - Partial progress for triage completion and bed allocation
+| Action | Required Fields | Description |
+|---|---|---|
+| triage_patient | patient_id, esi_level | Assign ESI level (1-5) to a patient |
+| allocate_bed | patient_id, bed_type | Assign patient to icu, trauma, or standard bed |
+| order_vitals_check | patient_id | Request a vitals refresh for a patient |
+| no_op | none | No state-changing action |
 
-Example scoring form:
+Notes:
+- ESI levels are validated in the action model (1-5).
+- Bed type is constrained to icu, trauma, standard.
 
-$$
-score = accuracy - 0.3 \cdot preventable\_deaths - 0.1 \cdot wasted\_resources
-$$
+## Tasks and Difficulty
 
-Scores are clamped to $(0.01, 0.99)$ to avoid the Phase 2 out-of-range autograder issue.
+Tasks are defined in openenv.yaml and graded independently:
 
-The environment reward includes partial progress signals and is returned as a typed object:
+| Task ID | Name | Difficulty | Objective |
+|---|---|---|---|
+| routine_resource_allocation | Routine Resource Allocation | easy | Triage routine flow and avoid unnecessary resource overuse |
+| hidden_deterioration_triage | Hidden Deterioration Triage | medium | Detect a patient that appears mild but requires escalation based on vitals |
+| mass_casualty_surge | Mass Casualty Surge | hard | Handle a high-volume arrival wave with strict critical-care prioritization |
 
-$$
-reward = 0.02 \cdot triaged + 0.03 \cdot bedded - 0.5 \cdot preventable\_deaths
-$$
+## Setup
 
-## Task Definitions (openenv.yaml)
-See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
-- Routine Resource Allocation
-- Hidden Deterioration Triage
-- Mass Casualty Surge
-## Environment Variables (Competition)
+### 1) Requirements
+- Python 3.10+
+- Docker (for container run/HF Space)
 
-**Required for competition submissions:**
+### 2) Install dependencies
 
-| Variable | Description | Status |
-|----------|-------------|---------|
-| `API_BASE_URL` | **REQUIRED** - LiteLLM proxy URL injected by competition | Must be set |
-| `API_KEY` | **REQUIRED** - API key for proxy injected by competition | Must be set |
-| `MODEL_NAME` | Model to use (optional, defaults to gpt-4o-mini) | Optional |
-| `ENV_BASE_URL` | Environment server URL | Optional |
-
-**Important:** The script will **fail** if `API_BASE_URL` or `API_KEY` are not set. This ensures proper use of the competition's LiteLLM proxy.
-
-**For local development:**
 ```bash
-export API_BASE_URL="https://api.openai.com/v1"
-export API_KEY="your-openai-api-key"
-export MODEL_NAME="gpt-4o-mini"
+pip install -r requirements.txt
+```
+
+### 3) Required environment variables for inference.py
+
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| API_BASE_URL | yes | https://api.openai.com/v1 | OpenAI-compatible endpoint |
+| MODEL_NAME | yes | gpt-4o-mini | Model identifier used for generation |
+| HF_TOKEN | yes | none | API token used as OpenAI api_key |
+| ENV_BASE_URL | no | http://127.0.0.1:7860 | Environment server URL |
+
+HF_TOKEN is mandatory. inference.py exits early if it is missing.
+
+## Usage
+
+### Run environment server
+
+```bash
+python -m uvicorn env_server:app --host 0.0.0.0 --port 7860
+```
+
+### Run baseline inference
+
+```bash
+export API_BASE_URL=<your-endpoint>
+export MODEL_NAME=gpt-4o-mini
+export HF_TOKEN=<your-token>
+export ENV_BASE_URL=http://127.0.0.1:7860
 python inference.py
 ```
+
+The script emits structured logs in this format:
+- [START] task=... env=... model=...
+- [STEP] step=... action=... reward=... done=... error=...
+- [END] success=... steps=... score=... rewards=...
+
+## Baseline Scores
+
+Approximate baseline (gpt-4o-mini, default step limits):
+
+| Task | Difficulty | Max Steps | Baseline Score |
+|---|---|---:|---:|
+| routine_resource_allocation | easy | 12 | ~0.65 |
+| hidden_deterioration_triage | medium | 12 | ~0.45 |
+| mass_casualty_surge | hard | 15 | ~0.30 |
+
+Scores are expected to vary by provider/model latency and generation behavior.
 
 ## Repository Layout
-```
+
+```text
 .
-├── env_server.py      # FastAPI server implementation
-├── inference.py       # Baseline evaluation script
-├── models.py          # Typed Pydantic models (Action, Observation, etc.)
-├── client.py          # Standard OpenEnv client (EnvClient)
-├── openenv.yaml       # Task metadata and grader definitions
-├── Dockerfile         # Container definition (Port 7860)
-├── requirements.txt   # Dependencies
-├── src/medtriage/     # Simulation core logic
-└── tasks/             # Procedural graders per task
+├── inference.py
+├── env_server.py
+├── client.py
+├── models.py
+├── openenv.yaml
+├── Dockerfile
+├── requirements.txt
+├── src/medtriage/
+└── tasks/
 ```
 
-## Baseline Reproducibility
+## Docker
 
-Scores below are approximate. Run with seed=42 for deterministic episodes.
-
-| Task | Difficulty | Max Steps | Baseline Score | Model |
-|------|-----------|-----------|----------------|-------|
-| routine_resource_allocation | easy | 12 | ~0.65 | gpt-4o-mini |
-| hidden_deterioration_triage | medium | 12 | ~0.45 | gpt-4o-mini |
-| mass_casualty_surge | hard | 15 | ~0.30 | gpt-4o-mini |
-
-### Reproducing baseline
+Build and run:
 
 ```bash
-export API_BASE_URL=<injected-litellm-proxy-url>
-export HF_TOKEN=<your-key>
-export MODEL_NAME=gpt-4o-mini
-python inference.py
+docker build -t medtriage .
+docker run -p 7860:7860 medtriage
 ```
 
-## Deployment
-1. **Containerized Execution**:
-   - `docker build -t medtriage .`
-   - `docker run -p 7860:7860 medtriage`
-2. **Hugging Face Space**:
-   - Tag your Space with `openenv`
-   - For judged submissions, do not hardcode or manually override `API_BASE_URL` / `HF_TOKEN` with your own provider values in Space settings. The evaluator injects those at runtime.
-   - Delete any stale `API_KEY` or `OPENAI_API_KEY` Space secrets so your run cannot silently use your own provider credentials instead of the evaluator proxy.
+## Validation
 
-## OpenEnv Validation
-The environment is fully compliant with the OpenEnv specification.
-- `openenv validate` ➔ **PASSED**
-- `scripts/validate-submission.sh` ➔ **PASSED**
+- openenv validate
+- scripts/validate-submission.sh
 
----
-
-# MedTriage Agent (Healthcare RL Environment)
-
-MedTriage Agent is a reinforcement learning environment that simulates a hospital emergency room where an intelligent agent performs the role of a triage nurse. The system is designed to model real-world constraints such as limited ICU beds, limited medical staff, and unpredictable patient inflow. The agent receives patient information including vital signs, symptoms, and medical history, and must make decisions that directly impact patient outcomes.
-
-The primary objective of the agent is to correctly prioritize patients based on severity. This involves identifying critical cases quickly and ensuring that high-risk patients receive immediate attention. At the same time, the agent must efficiently allocate scarce resources such as ICU beds and available doctors without causing preventable patient deterioration or death.
-
-The environment introduces dynamic challenges such as sudden mass-casualty events, where multiple patients arrive at once. This tests the agent’s ability to adapt under pressure and make optimal decisions in highly constrained and time-sensitive situations. The agent must balance fairness, urgency, and resource limitations while maintaining overall system stability.
-
-Overall, MedTriage Agent highlights how AI can be used to support critical decision-making in emergency healthcare settings, making it a strong example of applied reinforcement learning in a socially meaningful context.
+Both checks should pass before submission.
