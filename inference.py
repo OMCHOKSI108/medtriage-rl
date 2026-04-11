@@ -1,6 +1,7 @@
 """Hackathon inference loop for the MedTriage OpenEnv environment.
 
-Runs all 3 tasks (routine, deterioration, mass_casualty) sequentially using the OpenAI client.
+Runs all 3 tasks (routine, deterioration, mass_casualty) sequentially using an
+OpenAI-compatible client (e.g., HF Router).
 Emits structured [START]/[STEP]/[END] logs per the hackathon spec.
 """
 
@@ -27,9 +28,9 @@ except Exception as _import_err:
 
 API_BASE_URL = os.getenv("API_BASE_URL") or "https://router.huggingface.co/v1"
 LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL") or API_BASE_URL
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+API_KEY = os.getenv("HF_TOKEN")
 ENV_BASE_URL = "http://127.0.0.1:7860"
-MODEL_NAME = "gpt-4o-mini"  # Reliable model with good performance, use gpt-5.4 if available
+MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
 
 BENCHMARK_NAME          = "medtriage-er-simulator"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
@@ -67,19 +68,19 @@ def load_runtime_config() -> None:
         LLM_API_BASE_URL = os.getenv("LLM_API_BASE_URL")
     else:
         LLM_API_BASE_URL = API_BASE_URL
-    if os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY"):
-        API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
+    if os.getenv("HF_TOKEN"):
+        API_KEY = os.getenv("HF_TOKEN")
     
     # Ensure we have an API key
     if not API_KEY:
-        raise ValueError("HF_TOKEN or OPENAI_API_KEY environment variable is required for competition submissions")
+        raise ValueError("HF_TOKEN environment variable is required for competition submissions")
 
     ENV_BASE_URL = (
         os.getenv("ENV_BASE_URL")
         or os.getenv("ENV_SERVER_URL")
         or "http://127.0.0.1:7860"
     ).strip()
-    MODEL_NAME = (os.getenv("MODEL_NAME") or "gpt-4o-mini").strip() or "gpt-4o-mini"  # Default to reliable gpt-4o-mini
+    MODEL_NAME = (os.getenv("MODEL_NAME") or "meta-llama/Llama-3.1-8B-Instruct").strip() or "meta-llama/Llama-3.1-8B-Instruct"
 
 # ===========================================================================
 # STRUCTURED LOGGING  (hackathon spec — do NOT change format)
@@ -147,13 +148,22 @@ def build_user_prompt(
     bed_status: dict,
     active_alarms: list[str],
 ) -> str:
+    def _as_patient_dict(p: object) -> dict:
+        if hasattr(p, "model_dump"):
+            return p.model_dump()  # type: ignore[return-value]
+        if isinstance(p, dict):
+            return p
+        return {}
+
     room_lines = [
-        f"id={p.get('patient_id')} age={p.get('age')} "
-        f"complaint={p.get('complaint')} "
-        f"HR={p.get('vitals', {}).get('heart_rate')} "
-        f"SpO2={p.get('vitals', {}).get('spo2')} "
-        f"esi={p.get('esi_assigned')}"
-        for p in waiting_room
+        (
+            f"id={pd.get('patient_id')} age={pd.get('age')} "
+            f"complaint={pd.get('complaint')} "
+            f"HR={pd.get('vitals', {}).get('heart_rate')} "
+            f"SpO2={pd.get('vitals', {}).get('spo2')} "
+            f"esi={pd.get('esi_assigned')}"
+        )
+        for pd in (_as_patient_dict(p) for p in waiting_room)
     ]
     room_block = " | ".join(room_lines) if room_lines else "nobody waiting"
     return (
@@ -369,7 +379,12 @@ async def run_task(
         raw_score = sum(rewards) / max_reward if max_reward > 0 else 0.0
         score = min(max(raw_score, 0.01), 0.99)
         success = score >= SUCCESS_SCORE_THRESHOLD
-
+    except Exception as run_exc:
+        print(f"[ERROR] run_task failed: {run_exc}", flush=True)
+        log_step(step=1, action="run_task_error", reward=0.0, done=True, error=str(run_exc))
+        success = False
+        steps_taken = steps_taken or 1
+        score = 0.01
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
