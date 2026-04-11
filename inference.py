@@ -10,7 +10,6 @@ import time
 import asyncio
 from typing import List, Optional, Set
 from urllib import request as urllib_request
-
 from openai import OpenAI
 
 try:
@@ -27,31 +26,30 @@ except Exception as _import_err:
 # STRICT EVALUATOR CONFIGURATION
 # ===========================================================================
 # The evaluator explicitly injects API_BASE_URL and API_KEY.
-# We MUST use exactly those, with no fallback to external endpoints.
+# We MUST use exactly those, with NO modification whatsoever.
 
-# Read required environment variables – fail immediately if missing
-API_BASE_URL = os.environ.get("API_BASE_URL")
-API_KEY = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
-ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860")
+API_BASE_URL = os.environ.get("API_BASE_URL", "").strip()
+API_KEY      = (os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")).strip()
+MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
+ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860").strip()
 
-BENCHMARK_NAME = "medtriage-er-simulator"
-REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "8"))
-REQUEST_MAX_RETRIES = int(os.getenv("REQUEST_MAX_RETRIES", "3"))
-MAX_RUNTIME_SECONDS = int(os.getenv("INFERENCE_TIMEOUT_SECONDS", "1100"))
-SUCCESS_SCORE_THRESHOLD = 0.6
-MAX_TOTAL_REWARD = 1.0
+BENCHMARK_NAME           = "medtriage-er-simulator"
+REQUEST_TIMEOUT_SECONDS  = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
+REQUEST_MAX_RETRIES      = int(os.getenv("REQUEST_MAX_RETRIES", "2"))
+MAX_RUNTIME_SECONDS      = int(os.getenv("INFERENCE_TIMEOUT_SECONDS", "1100"))
+SUCCESS_SCORE_THRESHOLD  = 0.6
+MAX_TOTAL_REWARD         = 1.0
 
 TASK_IDS = [
     "routine_resource_allocation",
     "hidden_deterioration_triage",
-    "mass_casualty_surge"
+    "mass_casualty_surge",
 ]
 
 TASK_MAX_STEPS = {
-    "routine_resource_allocation": 12,
-    "hidden_deterioration_triage": 12,
-    "mass_casualty_surge": 15,
+    "routine_resource_allocation":  12,
+    "hidden_deterioration_triage":  12,
+    "mass_casualty_surge":          15,
 }
 
 # ---------------------------------------------------------------------------
@@ -61,14 +59,7 @@ TASK_MAX_STEPS = {
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
-
-def log_step(
-    step: int,
-    action: str,
-    reward: float,
-    done: bool,
-    error: Optional[str],
-) -> None:
+def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
     error_value = error if error else "null"
     print(
         f"[STEP] step={step} action={action} reward={reward:.2f} "
@@ -76,23 +67,21 @@ def log_step(
         flush=True,
     )
 
-
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{value:.2f}" for value in rewards)
+    rewards_str = ",".join(f"{v:.2f}" for v in rewards)
     print(
         f"[END] success={str(success).lower()} "
         f"steps={steps} score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
 
-
-def _normalize_base_url(base_url: str) -> str:
-    return base_url.rstrip("/")
+# ---------------------------------------------------------------------------
+# Server readiness probe
+# ---------------------------------------------------------------------------
 
 def wait_for_server(base_url: str, max_attempts: int = 30, delay: int = 4) -> bool:
-    """Polls the server /state endpoint until it is ready."""
-    for i in range(max_attempts):
-        url = f"{_normalize_base_url(base_url)}/state"
+    url = f"{base_url.rstrip('/')}/state"
+    for _ in range(max_attempts):
         try:
             req = urllib_request.Request(url, method="GET", headers={"Accept": "application/json"})
             with urllib_request.urlopen(req, timeout=5) as resp:
@@ -110,26 +99,22 @@ def wait_for_server(base_url: str, max_attempts: int = 30, delay: int = 4) -> bo
 SYSTEM_PROMPT = (
     "You are an elite ER triage agent managing patients and allocating beds.\n"
     "CRITICAL RULES FOR STATE ADVANCEMENT:\n"
-    "1. TRIAGE FIRST: If a patient hasn't been assigned an ESI level, use 'triage_patient' with esi_level (1-5).\n"
-    "2. ALLOCATE BEDS: If triaged, move them to a bed using 'allocate_bed' with bed_type ('icu', 'trauma', 'standard').\n"
-    "3. RESPOND ONLY WITH JSON: Keys required: action_type, patient_id. "
-    "Include 'esi_level' (int) if triaging. Include 'bed_type' (str) if allocating a bed.\n"
+    "1. TRIAGE FIRST: If a patient has no ESI level, use 'triage_patient' with esi_level (1-5).\n"
+    "2. ALLOCATE BEDS: If already triaged, use 'allocate_bed' with bed_type ('icu', 'trauma', 'standard').\n"
+    "3. RESPOND ONLY WITH JSON. Required keys: action_type, patient_id. "
+    "Add 'esi_level' (int) when triaging. Add 'bed_type' (str) when allocating.\n"
+    "Example triage:   {\"action_type\": \"triage_patient\", \"patient_id\": \"p1\", \"esi_level\": 2}\n"
+    "Example allocate: {\"action_type\": \"allocate_bed\",   \"patient_id\": \"p1\", \"bed_type\": \"icu\"}\n"
 )
 
-def build_user_prompt(
-    task_id: str,
-    waiting_room: List[dict],
-    bed_status: dict,
-    active_alarms: List[str],
-) -> str:
+def build_user_prompt(task_id: str, waiting_room: List[dict], bed_status: dict, active_alarms: List[str]) -> str:
     room_lines = [
         f"id={p.get('patient_id')} age={p.get('age')} complaint={p.get('complaint')} "
-        f"HR={p.get('vitals',{}).get('heart_rate')} SpO2={p.get('vitals',{}).get('spo2')} "
+        f"HR={p.get('vitals', {}).get('heart_rate')} SpO2={p.get('vitals', {}).get('spo2')} "
         f"esi={p.get('esi_assigned')}"
         for p in waiting_room
     ]
     room_block = " | ".join(room_lines) if room_lines else "nobody waiting"
-    
     return (
         f"Task: {task_id}. "
         f"Waiting room: {room_block}. "
@@ -137,125 +122,115 @@ def build_user_prompt(
         f"Active critical alarms: {active_alarms}."
     )
 
-
 # ---------------------------------------------------------------------------
-# LLM action selection
+# LLM action selection  –  ALL failures are logged, never silently swallowed
 # ---------------------------------------------------------------------------
 
-def choose_action_with_llm(
-    client: OpenAI,
-    task_id: str,
-    prompt: str,
-) -> "MedTriageAction":
-    default_action = MedTriageAction(action_type=ActionType.NO_OP)
-
+def choose_action_with_llm(client: OpenAI, task_id: str, prompt: str) -> "MedTriageAction":
+    """Call the LLM proxy and parse the action. Returns None on any failure."""
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
+                {"role": "user",   "content": prompt},
             ],
             temperature=0.0,
             max_tokens=200,
             stream=False,
         )
-        raw_content = (completion.choices[0].message.content or "").strip()
-        if not raw_content:
-            return default_action
+        raw = (completion.choices[0].message.content or "").strip()
+        print(f"[DEBUG] LLM raw response: {raw!r}", flush=True)
 
-        if raw_content.startswith("```"):
-            lines = raw_content.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            raw_content = "\n".join(lines)
+        if not raw:
+            print("[WARN] LLM returned empty response", flush=True)
+            return None
 
-        if "{" in raw_content and "}" in raw_content:
-            start = raw_content.find("{")
-            end = raw_content.rfind("}") + 1
-            raw_content = raw_content[start:end]
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            lines = [l for l in raw.split("\n") if not l.strip().startswith("```")]
+            raw = "\n".join(lines).strip()
 
-        data = json.loads(raw_content)
-        
-        # Build strict payload
+        # Extract first JSON object
+        start = raw.find("{")
+        end   = raw.rfind("}") + 1
+        if start == -1 or end == 0:
+            print(f"[WARN] No JSON object found in LLM response: {raw!r}", flush=True)
+            return None
+
+        data = json.loads(raw[start:end])
+
         act_type = data.get("action_type", "no_op")
-        action_payload = {"action_type": act_type}
-        
-        if "patient_id" in data:
-            action_payload["patient_id"] = str(data["patient_id"])
-        
-        if act_type == "triage_patient" and "esi_level" in data:
-            action_payload["esi_level"] = int(data["esi_level"])
-            
-        if act_type == "allocate_bed" and "bed_type" in data:
-            action_payload["bed_type"] = str(data["bed_type"])
+        payload  = {"action_type": act_type}
 
-        return MedTriageAction(**action_payload)
+        if "patient_id" in data:
+            payload["patient_id"] = str(data["patient_id"])
+        if act_type == "triage_patient" and "esi_level" in data:
+            payload["esi_level"] = int(data["esi_level"])
+        if act_type == "allocate_bed" and "bed_type" in data:
+            payload["bed_type"] = str(data["bed_type"])
+
+        return MedTriageAction(**payload)
 
     except Exception as e:
-        print(f"[DEBUG] LLM failed: {e}", flush=True)
-        return default_action
+        # Log the real error – do NOT silently return a no_op
+        print(f"[ERROR] LLM call failed: {type(e).__name__}: {e}", flush=True)
+        return None  # caller will use fallback
 
 def choose_action_with_fallback(
-    llm_action: "MedTriageAction",
+    llm_action: Optional["MedTriageAction"],
     waiting_room: List[dict],
     bed_status: dict,
     triaged_patients: Set[str],
 ) -> "MedTriageAction":
-    
-    # Trust valid LLM Output
-    if getattr(llm_action, 'action_type', "no_op") != "no_op" and getattr(llm_action, 'patient_id', None) is not None:
+    """Use LLM action if valid, otherwise apply deterministic fallback."""
+
+    # Accept valid LLM action
+    if (
+        llm_action is not None
+        and getattr(llm_action, "action_type", "no_op") != "no_op"
+        and getattr(llm_action, "patient_id", None) is not None
+    ):
         return llm_action
 
-    # FALLBACK ENGINE
     if not waiting_room:
         return MedTriageAction(action_type=ActionType.NO_OP)
 
-    # Pick the most critical un-triaged patient
+    # Triage the first un-triaged patient
     for p in waiting_room:
         pid = p.get("patient_id")
         if pid not in triaged_patients and p.get("esi_assigned") is None:
-            return MedTriageAction(
-                action_type=ActionType.TRIAGE_PATIENT,
-                patient_id=pid,
-                esi_level=3
-            )
-            
-    # If all triaged, allocate beds based on availability
+            # Assign severity based on vitals
+            vitals = p.get("vitals", {})
+            hr   = vitals.get("heart_rate", 80)
+            spo2 = vitals.get("spo2", 98)
+            esi  = 1 if (hr and hr > 130) or (spo2 and spo2 < 88) else \
+                   2 if (hr and hr > 100) or (spo2 and spo2 < 92) else 3
+            return MedTriageAction(action_type=ActionType.TRIAGE_PATIENT, patient_id=pid, esi_level=esi)
+
+    # Allocate beds for triaged patients
     for p in waiting_room:
         pid = p.get("patient_id")
         if p.get("esi_assigned") is not None:
-            bed_type = "standard"
-            if bed_status.get("trauma", 0) > 0:
-                bed_type = "trauma"
-            elif bed_status.get("icu", 0) > 0:
-                bed_type = "icu"
-                
-            return MedTriageAction(
-                action_type=ActionType.ALLOCATE_BED,
-                patient_id=pid,
-                bed_type=bed_type
-            )
+            esi      = p.get("esi_assigned", 3)
+            bed_type = "icu"     if esi <= 1 and bed_status.get("icu", 0) > 0    else \
+                       "trauma"  if esi <= 2 and bed_status.get("trauma", 0) > 0 else \
+                       "standard"
+            return MedTriageAction(action_type=ActionType.ALLOCATE_BED, patient_id=pid, bed_type=bed_type)
 
     return MedTriageAction(action_type=ActionType.NO_OP)
-
 
 # ---------------------------------------------------------------------------
 # Single-task runner
 # ---------------------------------------------------------------------------
 
-async def run_task(
-    llm_client: OpenAI,
-    env: "MedTriageEnv",
-    task_id: str,
-    start_time: float,
-) -> None:
-    """Run a single task and emit structured logs."""
-    max_steps = TASK_MAX_STEPS.get(task_id, 12)
-    task_name = f"medtriage-{task_id}"
-    rewards: List[float] = []
+async def run_task(llm_client: OpenAI, env: "MedTriageEnv", task_id: str, start_time: float) -> None:
+    max_steps  = TASK_MAX_STEPS.get(task_id, 12)
+    task_name  = f"medtriage-{task_id}"
+    rewards:   List[float] = []
     steps_taken = 0
-    score = 0.01
-    success = False
+    score       = 0.01
+    success     = False
     triaged_patients: Set[str] = set()
 
     log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
@@ -268,34 +243,21 @@ async def run_task(
             return
 
         for step in range(1, max_steps + 1):
-            elapsed = time.time() - start_time
-            if elapsed >= MAX_RUNTIME_SECONDS:
+            if time.time() - start_time >= MAX_RUNTIME_SECONDS:
                 log_step(step=step, action="timeout_guard", reward=0.0, done=True, error="runtime limit reached")
                 break
 
-            obs_dict = obs.model_dump() if hasattr(obs, 'model_dump') else obs
+            obs_dict     = obs.model_dump() if hasattr(obs, "model_dump") else obs
             waiting_room = obs_dict.get("waiting_room", [])
-            
+
             if not waiting_room:
                 break
 
-            prompt = build_user_prompt(
-                task_id=task_id,
-                waiting_room=waiting_room,
-                bed_status=obs_dict.get("bed_status", {}),
-                active_alarms=obs_dict.get("active_alarms", []),
-            )
-            
-            action = choose_action_with_llm(llm_client, task_id, prompt)
-            
-            action = choose_action_with_fallback(
-                llm_action=action,
-                waiting_room=waiting_room,
-                bed_status=obs_dict.get("bed_status", {}),
-                triaged_patients=triaged_patients,
-            )
+            prompt     = build_user_prompt(task_id, waiting_room, obs_dict.get("bed_status", {}), obs_dict.get("active_alarms", []))
+            llm_action = choose_action_with_llm(llm_client, task_id, prompt)
+            action     = choose_action_with_fallback(llm_action, waiting_room, obs_dict.get("bed_status", {}), triaged_patients)
 
-            if getattr(action, 'action_type') == "triage_patient" and getattr(action, 'patient_id', None):
+            if getattr(action, "action_type") == "triage_patient" and getattr(action, "patient_id", None):
                 triaged_patients.add(action.patient_id)
 
             try:
@@ -304,19 +266,18 @@ async def run_task(
                 log_step(step=step, action="env.step()", reward=0.0, done=True, error=str(exc))
                 break
 
-            reward_val = float(getattr(reward_obj, 'value', reward_obj) or 0.0)
+            reward_val  = float(getattr(reward_obj, "value", reward_obj) or 0.0)
             rewards.append(reward_val)
             steps_taken = step
 
             action_type = getattr(action, "action_type")
-            pid = getattr(action, "patient_id")
-            esi = getattr(action, "esi_level", None)
-            bed = getattr(action, "bed_type", None)
-            action_str = f"{action_type}(patient_id={pid}, esi={esi}, bed={bed})"
-            
+            pid         = getattr(action, "patient_id", None)
+            esi         = getattr(action, "esi_level", None)
+            bed         = getattr(action, "bed_type", None)
+
             log_step(
                 step=step,
-                action=action_str,
+                action=f"{action_type}(patient_id={pid}, esi={esi}, bed={bed})",
                 reward=reward_val,
                 done=bool(done),
                 error=None,
@@ -326,12 +287,11 @@ async def run_task(
                 break
 
         total_reward = sum(rewards)
-        score = min(max(total_reward / MAX_TOTAL_REWARD, 0.01), 0.99) if MAX_TOTAL_REWARD > 0 else 0.01
+        score   = min(max(total_reward / MAX_TOTAL_REWARD, 0.01), 0.99) if MAX_TOTAL_REWARD > 0 else 0.01
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     finally:
         log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
-
 
 # ---------------------------------------------------------------------------
 # Main
@@ -340,7 +300,6 @@ async def run_task(
 async def main() -> None:
     start_time = time.time()
 
-    # Import failure handling
     if not _IMPORT_OK:
         for task_id in TASK_IDS:
             log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
@@ -348,95 +307,95 @@ async def main() -> None:
             log_end(False, 1, 0.01, [0.01])
         return
 
-    # Validate required environment variables – NO FALLBACK
-    missing_vars = []
+    # -----------------------------------------------------------------------
+    # FIX 1: Validate env vars BEFORE touching them — no silent fallback
+    # -----------------------------------------------------------------------
+    missing = []
     if not API_BASE_URL:
-        missing_vars.append("API_BASE_URL")
+        missing.append("API_BASE_URL")
     if not API_KEY:
-        missing_vars.append("API_KEY (or HF_TOKEN)")
-    
-    if missing_vars:
-        error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
-        # Log failure for each task as required by spec
+        missing.append("API_KEY (or HF_TOKEN)")
+
+    if missing:
+        err = f"Missing required environment variables: {', '.join(missing)}"
         for task_id in TASK_IDS:
-            task_name = f"medtriage-{task_id}"
-            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
-            log_step(step=1, action="init", reward=0.0, done=True, error=error_msg)
-            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(1, "init", 0.0, True, error=err)
+            log_end(False, 1, 0.01, [0.0])
         return
 
-    # Ensure URL has protocol (evaluator may inject without http://)
-    base_url = API_BASE_URL
-    if not base_url.startswith(("http://", "https://")):
-        base_url = f"http://{base_url}"
+    # -----------------------------------------------------------------------
+    # FIX 2: Use API_BASE_URL EXACTLY as injected — no protocol manipulation
+    # -----------------------------------------------------------------------
+    print(f"[INFO] Using API_BASE_URL={API_BASE_URL!r}", flush=True)
+    print(f"[INFO] Using MODEL_NAME={MODEL_NAME!r}", flush=True)
 
-    # Wait for environment server
-    if not wait_for_server(ENV_BASE_URL, max_attempts=30, delay=4):
-        error_msg = f"Environment server at {ENV_BASE_URL} not ready"
+    if not wait_for_server(ENV_BASE_URL):
+        err = f"Environment server at {ENV_BASE_URL} not ready"
         for task_id in TASK_IDS:
-            task_name = f"medtriage-{task_id}"
-            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
-            log_step(step=1, action="wait_for_server", reward=0.0, done=True, error=error_msg)
-            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(1, "wait_for_server", 0.0, True, error=err)
+            log_end(False, 1, 0.01, [0.0])
         return
 
-    # Create OpenAI client using injected values – NO FALLBACK
+    # -----------------------------------------------------------------------
+    # FIX 3: Create client with exact injected values, timeout long enough
+    # -----------------------------------------------------------------------
     try:
         llm_client = OpenAI(
-            base_url=base_url,
+            base_url=API_BASE_URL,   # ← exact value, zero modification
             api_key=API_KEY,
             timeout=REQUEST_TIMEOUT_SECONDS,
             max_retries=REQUEST_MAX_RETRIES,
         )
     except Exception as e:
-        error_msg = f"Failed to create OpenAI client: {str(e)}"
+        err = f"Failed to create OpenAI client: {e}"
         for task_id in TASK_IDS:
-            task_name = f"medtriage-{task_id}"
-            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
-            log_step(step=1, action="init_client", reward=0.0, done=True, error=error_msg)
-            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(1, "init_client", 0.0, True, error=err)
+            log_end(False, 1, 0.01, [0.0])
         return
 
-    # Optional warmup – uses the same client, all requests go through the proxy
+    # -----------------------------------------------------------------------
+    # FIX 4: Warmup call — if it fails, STOP. Don't silently continue.
+    # -----------------------------------------------------------------------
     try:
+        print("[INFO] Sending warmup ping to LLM proxy...", flush=True)
         llm_client.chat.completions.create(
             model=MODEL_NAME,
-            messages=[{"role": "system", "content": "ping"}],
+            messages=[{"role": "user", "content": "ping"}],
             max_tokens=5,
             temperature=0.0,
         )
-    except Exception:
-        # Warmup failure is not fatal; proceed anyway
-        pass
+        print("[INFO] Warmup ping succeeded — proxy is reachable.", flush=True)
+    except Exception as e:
+        err = f"LLM proxy warmup failed: {type(e).__name__}: {e}"
+        print(f"[ERROR] {err}", flush=True)
+        # Fail all tasks — there is no point running if the proxy is unreachable
+        for task_id in TASK_IDS:
+            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(1, "warmup_ping", 0.0, True, error=err)
+            log_end(False, 1, 0.01, [0.0])
+        return
 
-    # Create environment client
     try:
         env = MedTriageEnv(base_url=ENV_BASE_URL)
     except Exception as e:
-        error_msg = f"Failed to create environment client: {str(e)}"
+        err = f"Failed to create environment client: {e}"
         for task_id in TASK_IDS:
-            task_name = f"medtriage-{task_id}"
-            log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
-            log_step(step=1, action="init_env", reward=0.0, done=True, error=error_msg)
-            log_end(success=False, steps=1, score=0.01, rewards=[0.0])
+            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(1, "init_env", 0.0, True, error=err)
+            log_end(False, 1, 0.01, [0.0])
         return
 
-    # Run tasks sequentially
-    try:
-        for task_id in TASK_IDS:
-            await run_task(llm_client, env, task_id, start_time)
-            if time.time() - start_time >= MAX_RUNTIME_SECONDS:
-                break
-    except Exception as e:
-        # Log unexpected error for remaining tasks? Spec doesn't require, but safe to ignore.
-        pass
+    for task_id in TASK_IDS:
+        if time.time() - start_time >= MAX_RUNTIME_SECONDS:
+            break
+        await run_task(llm_client, env, task_id, start_time)
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        pass
-    except BaseException:
-        # Swallow to avoid noisy exit, evaluator will catch based on logs.
         pass
