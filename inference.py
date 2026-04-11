@@ -10,10 +10,17 @@ from openai import OpenAI
 # =========================
 # ENV CONFIG
 # =========================
-API_BASE_URL = os.getenv("API_BASE_URL") or "https://api.openai.com/v1"
-MODEL_NAME = os.getenv("MODEL_NAME") or "gpt-4o-mini"
+_raw_base = os.getenv("API_BASE_URL", "").strip()
+if not _raw_base:
+    API_BASE_URL = "https://api.openai.com/v1"
+elif not _raw_base.startswith("http"):
+    API_BASE_URL = f"http://{_raw_base}"
+else:
+    API_BASE_URL = _raw_base
+
+MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 # Support both token names, typical of Hugging Face Spaces and standard endpoints.
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY = os.getenv("HF_TOKEN", "").strip() or os.getenv("API_KEY", "").strip()
 
 ENV_SERVER_URL = os.getenv("ENV_SERVER_URL", "http://127.0.0.1:7860")
 BENCHMARK = "medtriage-er-simulator"
@@ -204,7 +211,11 @@ def main():
         print("[FATAL] Missing API_KEY or HF_TOKEN environment variables.", flush=True)
         return
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    try:
+        client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    except Exception as e:
+        print(f"[FATAL] Could not initialize OpenAI client: {e}", flush=True)
+        return
 
     # Warmup call
     try:
