@@ -3,15 +3,19 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional, Tuple
 
-from openenv.core.env_client import EnvClient
+import requests
 from models import Action, Observation, Reward, StepRequest, StepResponse
 
 
-class MedTriageClient(EnvClient):
+class MedTriageClient:
     """
     Client for the MedTriage environment.
     Connects to the FastAPI server and handles typed observations/actions.
     """
+
+    def __init__(self, base_url: str = "http://127.0.0.1:7860"):
+        self.base_url = base_url.rstrip("/")
+        self._session = requests.Session()
 
     def reset(self, **kwargs: Any) -> Observation:
         response = self._session.post(f"{self.base_url}/reset", json=kwargs or {})
