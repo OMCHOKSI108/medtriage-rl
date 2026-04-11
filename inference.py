@@ -1,200 +1,228 @@
 import json
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import requests
 import yaml
 from openai import OpenAI
 
+# =========================
+# ENV CONFIG
+# =========================
+API_BASE_URL = os.getenv("API_BASE_URL") or "https://api.openai.com/v1"
+MODEL_NAME = os.getenv("MODEL_NAME") or "gpt-4o-mini"
+# Support both token names, typical of Hugging Face Spaces and standard endpoints.
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
-def get_env_var(name: str, default: str = "") -> str:
-    val = os.environ.get(name)
-    if val is None or val.strip().lower() == "none" or val.strip() == "":
-        return default
-    return val.strip()
-
-# Strictly following the sample inference.py from the checklist
-API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.getenv("HF_TOKEN")
-
-# Internal Config
 ENV_SERVER_URL = os.getenv("ENV_SERVER_URL", "http://127.0.0.1:7860")
 BENCHMARK = "medtriage-er-simulator"
+
 MAX_STEPS = 12
-MAX_TOTAL_REWARD = 1.0
 SUCCESS_SCORE_THRESHOLD = 0.6
+MAX_TOTAL_REWARD = 1.0  # Used for normalization
 
+# =========================
+# STRICT LOGGING FORMAT
+# =========================
+def log_start(task: str):
+    print(f"[START] task={task} env={BENCHMARK} model={MODEL_NAME}", flush=True)
 
-def _emit(tag: str, payload: Dict[str, Any]) -> None:
-    print(f"[{tag}] {json.dumps(payload)}", flush=True)
-
-
-def log_start(task: str, env: str, model: str) -> None:
-    _emit("START", {"task": task, "env": env, "model": model})
-
-
-def log_step(step: int, action: Dict[str, Any], reward: float, done: bool, error: str | None) -> None:
-    _emit(
-        "STEP",
-        {
-            "step": step,
-            "action": action,
-            "reward": reward,
-            "done": done,
-            "error": error,
-        },
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None):
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
     )
 
+def log_end(success: bool, steps: int, score: float, rewards: List[float]):
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
+        flush=True,
+    )
 
-def log_end(task: str, success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    _emit("END", {"task": task, "success": success, "steps": steps, "score": score, "rewards": rewards})
+# =========================
+# HELPERS
+# =========================
+def wait_for_server():
+    for _ in range(20):
+        try:
+            r = requests.get(f"{ENV_SERVER_URL}/state", timeout=5)
+            if r.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(2)
+    return False
 
+def safe_post(url: str, payload: Dict[str, Any] | None = None):
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"[DEBUG] POST error: {e}", flush=True)
+        return {}
 
-def _clamp_score(score: float) -> float:
-    if score >= 1.0:
-        return 0.99
-    if score <= 0.0:
-        return 0.01
-    return score
+def load_tasks():
+    try:
+        with open("openenv.yaml", "r") as f:
+            return yaml.safe_load(f).get("tasks", [])
+    except Exception:
+        # Fallback to the first task if yaml is missing/corrupt
+        return [{"id": "routine_resource_allocation"}]
 
+# =========================
+# LLM DECISION MAKER
+# =========================
+def get_llm_action(client: OpenAI, observation: Dict, history: List[str]) -> Dict:
+    prompt = f"""
+You are an ER triage expert. Use the following observation to pick the next action.
 
-def _load_tasks() -> List[Dict[str, Any]]:
-    with open("openenv.yaml", "r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle)
-    return payload.get("tasks", [])
+Observation:
+{json.dumps(observation, indent=2)}
 
+History:
+{history[-3:] if history else 'None'}
 
-def _get_model_message(client: OpenAI, step: int, history: List[str]) -> str:
-    prompt = "You are a triage assistant. Return a short action plan."
+Choose the most critical patient and assign ESI level (1-5).
+Return ONLY a valid JSON object.
+
+Example:
+{{
+  "patient_id": "P-5",
+  "esi_level": 1
+}}
+"""
+
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
-            messages=[{"role": "user", "content": f"{prompt}\nStep: {step}\nHistory: {history}"}],
+            messages=[{"role": "user", "content": prompt}],
             temperature=0,
-            max_tokens=20,
-            stream=False,
+            max_tokens=150,
         )
+
         text = (completion.choices[0].message.content or "").strip()
-        return text if text else "triage"
-    except Exception:
-        return "triage"
+        
+        # Clean potential markdown formatting
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        
+        action_data = json.loads(text.strip())
+        patient_id = action_data.get("patient_id")
+        esi_level = action_data.get("esi_level", 3)
+        
+        # Ensure primitive types
+        if not patient_id:
+            raise ValueError("No patient_id provided from LLM")
+            
+        return {
+            "action_type": "triage_patient",
+            "patient_id": str(patient_id),
+            "esi_level": int(esi_level),
+        }
 
-
-def _choose_action(observation: Dict[str, Any]) -> Dict[str, Any]:
-    waiting_room = observation.get("waiting_room", [])
-    if not waiting_room:
+    except Exception as e:
+        print(f"[DEBUG] LLM parsing/request failed: {e}", flush=True)
+        # Safe fallback action to prevent crashing
+        waiting = observation.get("waiting_room", [])
+        if waiting:
+            return {
+                "action_type": "triage_patient",
+                "patient_id": waiting[0]["patient_id"],
+                "esi_level": 3,
+            }
         return {"action_type": "no_op"}
-    patient = waiting_room[0]
-    return {
-        "action_type": "triage_patient",
-        "patient_id": patient["patient_id"],
-        "esi_level": 3,
-    }
 
-
-def _get_reward_value(step_payload: Dict[str, Any]) -> float:
-    reward = step_payload.get("reward", {})
+def get_reward(result: Dict) -> float:
+    reward = result.get("reward", {})
     if isinstance(reward, dict):
         return float(reward.get("value", 0.0))
     return float(reward or 0.0)
 
-
-def _wait_for_server(max_attempts: int = 20, delay: int = 5) -> bool:
-    """Polls the server /state endpoint until it is ready."""
-    for i in range(max_attempts):
-        try:
-            response = requests.get(f"{ENV_SERVER_URL}/state", timeout=5)
-            if response.status_code == 200:
-                return True
-        except Exception:
-            pass
-        time.sleep(delay)
-    return False
-
-def _safe_post(url: str, json_data: Dict[str, Any] = None) -> Dict[str, Any]:
-    """Handles POST requests with robust error catching and JSON validation."""
-    try:
-        response = requests.post(url, json=json_data, timeout=10)
-        response.raise_for_status()
-        return response.json()
-    except Exception:
-        return {}
-
-def _run_task(task_id: str, client: OpenAI) -> float:
-    history: List[str] = []
-    rewards: List[float] = []
+# =========================
+# MAIN TASK LOOP
+# =========================
+def run_task(task_id: str, client: OpenAI):
+    history = []
+    rewards = []
     steps_taken = 0
-    
-    log_start(task=task_id, env=BENCHMARK, model=MODEL_NAME)
+    success = False
+    score = 0.0
 
-    # Polling wait (silent)
-    _wait_for_server()
+    log_start(task_id)
+    wait_for_server()
 
-    result = _safe_post(f"{ENV_SERVER_URL}/reset")
-    last_reward = 0.0
+    result = safe_post(f"{ENV_SERVER_URL}/reset")
 
-    for step in range(1, MAX_STEPS + 1):
-        if not result or result.get("done"):
-            break
+    try:
+        for step in range(1, MAX_STEPS + 1):
+            if not result or result.get("done"):
+                break
 
-        _ = _get_model_message(client, step, history)
-        action = _choose_action(result.get("observation", {}))
-        result = _safe_post(f"{ENV_SERVER_URL}/step", json_data={"action": action})
-        
-        reward = _get_reward_value(result or {})
-        done = (result or {}).get("done", True)
+            observation = result.get("observation", {})
+            action = get_llm_action(client, observation, history)
+            
+            result = safe_post(f"{ENV_SERVER_URL}/step", payload={"action": action})
 
-        rewards.append(reward)
-        steps_taken = step
-        last_reward = reward
+            reward = get_reward(result)
+            done = result.get("done", True)
 
-        log_step(step=step, action=action, reward=reward, done=bool(done), error=None)
-        history.append(f"Step {step}: reward {last_reward:+.2f}")
+            rewards.append(reward)
+            steps_taken = step
+            
+            # Format action for logging exactly as sample
+            if action.get("action_type") == "triage_patient":
+                action_str = f"triage('{action.get('patient_id')}', {action.get('esi_level')})"
+            else:
+                action_str = "no_op()"
+                
+            log_step(step, action_str, reward, done, None)
 
-        if done:
-            break
+            history.append(f"step {step}: reward {reward:+.2f}")
+            if done:
+                break
 
-    score = sum(rewards) / MAX_TOTAL_REWARD if MAX_TOTAL_REWARD > 0 else 0.0
-    score = _clamp_score(score)
-    success = score >= SUCCESS_SCORE_THRESHOLD
-    log_end(task=task_id, success=success, steps=steps_taken, score=score, rewards=rewards)
-    return score
+        # Calculate final score normalized to [0, 1]
+        total_reward = sum(rewards)
+        score = min(max(total_reward / MAX_TOTAL_REWARD, 0.0), 1.0) if MAX_TOTAL_REWARD > 0 else 0.0
+        success = score >= SUCCESS_SCORE_THRESHOLD
 
-def main() -> None:
-    # 1. Fail-fast if mandatory vars are missing (as requested)
-    if "API_BASE_URL" not in os.environ or "API_KEY" not in os.environ:
-        print("[FATAL] Required environment variables API_BASE_URL or API_KEY are missing.")
+    except Exception as e:
+        print(f"[DEBUG] Error during run_task: {e}", flush=True)
+    finally:
+        # Mandatory: Always emit END block, even if an exception breaks the loop
+        log_end(success, steps_taken, score, rewards)
+
+def main():
+    if not API_KEY:
+        print("[FATAL] Missing API_KEY or HF_TOKEN environment variables.", flush=True)
         return
 
-    # 2. Repair URL protocol in-place (Requirement to ensure constructor doesn't crash)
-    if not os.environ["API_BASE_URL"].startswith("http"):
-        os.environ["API_BASE_URL"] = f"http://{os.environ['API_BASE_URL']}"
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    # 3. Initialize EXATCLY as requested in "How to fix"
-    client = OpenAI(
-        base_url=os.environ["API_BASE_URL"], 
-        api_key=os.environ["API_KEY"]
-    )
-
-    # MANDATORY WARM-UP: Satisfies the "No API calls observed" requirement
+    # Warmup call
     try:
-        _ = _get_model_message(client, step=0, history=[])
+        client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "system", "content": "ping"}],
+            max_tokens=5,
+        )
     except Exception as e:
-        print(f"[WARNING] Proxy warm-up failed: {e}")
+         print(f"[DEBUG] proxy warmup failed: {e}", flush=True)
 
-    try:
-        tasks = _load_tasks()
-    except Exception:
-        tasks = []
-
+    tasks = load_tasks()
     for task in tasks:
         task_id = task.get("id", "unknown_task")
         try:
-            _run_task(task_id, client)
+            run_task(task_id, client)
         except Exception as e:
-            print(f"[ERROR] Task {task_id} failed: {e}")
+            print(f"[ERROR] Task {task_id} externally failed: {e}", flush=True)
 
 if __name__ == "__main__":
     main()
