@@ -26,7 +26,7 @@ except Exception as _import_err:
 # ===========================================================================
 
 API_BASE_URL = "https://api.openai.com/v1"
-OPENAI_API_KEY = ""
+API_KEY = ""
 ENV_BASE_URL = "http://127.0.0.1:7860"
 MODEL_NAME = "gpt-4o-mini"  # Reliable model with good performance, use gpt-5.4 if available
 
@@ -56,13 +56,13 @@ TASK_MAX_STEPS = {
 
 def load_runtime_config() -> None:
     """Resolve runtime configuration from the active process environment."""
-    global API_BASE_URL, OPENAI_API_KEY, ENV_BASE_URL, MODEL_NAME
+    global API_BASE_URL, API_KEY, ENV_BASE_URL, MODEL_NAME
 
     API_BASE_URL = (
         os.getenv("API_BASE_URL")
         or "https://api.openai.com/v1"
     ).strip()
-    OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
+    API_KEY = (os.getenv("API_KEY") or "").strip()
 
     ENV_BASE_URL = (
         os.getenv("ENV_BASE_URL")
@@ -379,8 +379,8 @@ async def main() -> None:
         return
 
     missing_vars = []
-    if not OPENAI_API_KEY:
-        missing_vars.append("OPENAI_API_KEY")
+    if not API_KEY:
+        missing_vars.append("API_KEY")
 
     if missing_vars:
         err = f"Missing required env vars: {', '.join(missing_vars)}"
@@ -392,7 +392,7 @@ async def main() -> None:
         return
 
     print(f"[INFO] API_BASE_URL = {API_BASE_URL!r}", flush=True)
-    print(f"[INFO] OPENAI_API_KEY_PRESENT = {str(bool(OPENAI_API_KEY)).lower()}", flush=True)
+    print(f"[INFO] API_KEY_PRESENT = {str(bool(API_KEY)).lower()}", flush=True)
     print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}", flush=True)
     print(f"[INFO] ENV_BASE_URL = {ENV_BASE_URL!r}", flush=True)
     if API_BASE_URL.startswith("https://api.openai.com") or API_BASE_URL.startswith("https://router.huggingface.co"):
@@ -416,7 +416,7 @@ async def main() -> None:
     try:
         llm_client = OpenAI(
             base_url=API_BASE_URL, 
-            api_key=OPENAI_API_KEY,
+            api_key=API_KEY,
             timeout=REQUEST_TIMEOUT_SECONDS,
             max_retries=REQUEST_MAX_RETRIES,
         )

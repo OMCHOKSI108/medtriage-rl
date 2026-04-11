@@ -88,6 +88,19 @@ See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
 - Routine Resource Allocation
 - Hidden Deterioration Triage
 - Mass Casualty Surge
+## Environment Variables (Competition)
+
+For HF Space deployment and competition submission, the following environment variables are required:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `API_BASE_URL` | LiteLLM proxy URL (injected by competition) | `https://litellm-proxy.com/v1` |
+| `API_KEY` | API key for the proxy (injected by competition) | `sk-...` |
+| `MODEL_NAME` | Model to use (optional, defaults to gpt-4o-mini) | `gpt-4o-mini` |
+| `ENV_BASE_URL` | Environment server URL | `http://127.0.0.1:7860` |
+
+**Important**: The competition injects `API_BASE_URL` and `API_KEY`. Do not hardcode your own OpenAI credentials - the submission will fail validation if it doesn't use the provided proxy.
+
 ## Repository Layout
 ```
 .
