@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
@@ -39,30 +40,167 @@ class SimState:
 class MedTriageSim:
     def __init__(self) -> None:
         self._state = SimState()
+        self._rng = random.Random(42)
+        self.current_task_id = "routine_resource_allocation"
+        self.simulation_clock = 0
+        self.preventable_deaths = 0
+        self.waiting_room: List[Patient] = []
+        self.active_alarms: List[str] = []
+        self.bed_status = {"icu": 4, "trauma": 2, "standard": 10}
 
-    def reset(self) -> Observation:
-        self._state = SimState()
-        for index in range(1, 6):
-            patient_id = f"P-{index}"
-            vitals = Vitals(heart_rate=80 + index, respiratory_rate=16, spo2=98)
-            patient = Patient(
-                patient_id=patient_id,
-                age=30 + index,
-                complaint="generalized pain",
-                vitals=vitals,
-                resources_expected=2,
-                requires_immediate=(index == 5),
-                high_acuity=(index == 5),
-            )
-            self._state.patients[patient_id] = patient
-            self._state.waiting_room.append(patient_id)
+    def reset(self, task_id: str = "routine_resource_allocation", seed: int = 42) -> Observation:
+        self._rng = random.Random(seed)
+        self.current_task_id = task_id
+        self.simulation_clock = 0
+        self.preventable_deaths = 0
+
+        if task_id == "routine_resource_allocation":
+            patients = self._gen_routine_patients()
+            self.bed_status = {"icu": 4, "trauma": 2, "standard": 10}
+        elif task_id == "hidden_deterioration_triage":
+            patients = self._gen_hidden_deterioration_patients()
+            self.bed_status = {"icu": 4, "trauma": 2, "standard": 10}
+        elif task_id == "mass_casualty_surge":
+            patients = self._gen_mass_casualty_patients()
+            self.bed_status = {"icu": 2, "trauma": 2, "standard": 6}
+        else:
+            patients = self._gen_routine_patients()
+            self.bed_status = {"icu": 4, "trauma": 2, "standard": 10}
+
+        self.waiting_room = patients
+        self.active_alarms = self._compute_active_alarms(patients)
+
+        self._state = SimState(
+            clock=0,
+            bed_status=BedStatus(**self.bed_status),
+            patients={p.patient_id: p for p in patients},
+            waiting_room=[p.patient_id for p in patients],
+        )
         return self._make_observation()
+
+    def _gen_routine_patients(self) -> List[Patient]:
+        complaints = [
+            "ankle sprain",
+            "mild headache",
+            "skin rash",
+            "sore throat",
+            "low back pain",
+        ]
+        patients: List[Patient] = []
+        for index in range(5):
+            patient = Patient(
+                patient_id=f"P_ROUTINE_{index + 1}",
+                age=self._rng.randint(20, 75),
+                complaint=complaints[index],
+                vitals=Vitals(
+                    heart_rate=self._rng.randint(65, 85),
+                    respiratory_rate=self._rng.randint(14, 18),
+                    spo2=self._rng.randint(96, 99),
+                ),
+                resources_expected=1,
+                requires_immediate=False,
+                high_acuity=False,
+                esi_assigned=self._rng.randint(3, 5),
+            )
+            patients.append(patient)
+        return patients
+
+    def _gen_hidden_deterioration_patients(self) -> List[Patient]:
+        benign_complaints = [
+            "mild cough",
+            "seasonal allergies",
+            "tension headache",
+            "minor nausea",
+        ]
+        patients: List[Patient] = []
+        for index in range(4):
+            patient = Patient(
+                patient_id=f"P_BENIGN_{index + 1}",
+                age=self._rng.randint(18, 70),
+                complaint=benign_complaints[index],
+                vitals=Vitals(
+                    heart_rate=self._rng.randint(70, 90),
+                    respiratory_rate=self._rng.randint(14, 18),
+                    spo2=self._rng.randint(95, 99),
+                ),
+                resources_expected=1,
+                requires_immediate=False,
+                high_acuity=False,
+                esi_assigned=self._rng.randint(3, 5),
+            )
+            patients.append(patient)
+
+        patients.append(
+            Patient(
+                patient_id="P_HIDDEN",
+                age=self._rng.randint(25, 65),
+                complaint="mild abdominal discomfort",
+                vitals=Vitals(heart_rate=114, respiratory_rate=23, spo2=88),
+                resources_expected=2,
+                requires_immediate=True,
+                high_acuity=True,
+                esi_assigned=2,
+            )
+        )
+        return patients
+
+    def _gen_mass_casualty_patients(self) -> List[Patient]:
+        injuries = [
+            "blunt trauma",
+            "smoke inhalation",
+            "cardiac chest pain",
+            "open fracture",
+            "burn injury",
+            "head trauma",
+            "pelvic fracture",
+            "thoracic trauma",
+            "limb crush injury",
+            "facial burns",
+            "abdominal trauma",
+            "spinal tenderness",
+            "ankle fracture",
+            "arm laceration",
+            "suspected arrhythmia",
+        ]
+        patients: List[Patient] = []
+        low_spo2_indices = {0, 3, 7, 10}
+        for index in range(15):
+            is_critical = index < 5
+            spo2 = self._rng.randint(84, 91) if index in low_spo2_indices else self._rng.randint(92, 98)
+            patient = Patient(
+                patient_id=f"P_MASS_{index + 1}",
+                age=self._rng.randint(16, 85),
+                complaint=injuries[index],
+                vitals=Vitals(
+                    heart_rate=self._rng.randint(105, 140) if is_critical else self._rng.randint(85, 110),
+                    respiratory_rate=self._rng.randint(22, 30) if is_critical else self._rng.randint(16, 22),
+                    spo2=spo2,
+                ),
+                resources_expected=self._rng.randint(1, 3),
+                requires_immediate=is_critical,
+                high_acuity=is_critical,
+                esi_assigned=1 if is_critical else self._rng.randint(2, 3),
+            )
+            patients.append(patient)
+        return patients
+
+    def _compute_active_alarms(self, patients: List[Patient]) -> List[str]:
+        alarms: List[str] = []
+        for p in patients:
+            if (
+                p.vitals.heart_rate > 100
+                or p.vitals.respiratory_rate > 20
+                or p.vitals.spo2 < 92
+            ):
+                alarms.append(p.patient_id)
+        return alarms
 
     def state(self) -> Observation:
         return self._make_observation()
 
     def step(self, action: Action) -> Tuple[Observation, Reward, bool, Dict[str, object]]:
         self._state.clock += 1
+        self.simulation_clock = self._state.clock
         info: Dict[str, object] = {}
 
         if action.action_type == ActionType.TRIAGE_PATIENT:
@@ -146,6 +284,7 @@ class MedTriageSim:
         reward_value = max(0.0, min(1.0, reward_value))
 
         info["preventable_deaths"] = preventable_deaths
+        self.preventable_deaths += preventable_deaths
         components = {
             "triage_progress": 0.02 * triaged,
             "bed_allocation": 0.03 * bedded,

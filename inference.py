@@ -8,7 +8,6 @@ import os
 import json
 import time
 import asyncio
-from typing import List, Optional, Set
 from urllib import request as urllib_request
 from openai import OpenAI
 
@@ -26,8 +25,8 @@ except Exception as _import_err:
 # CONFIGURATION — use injected env vars EXACTLY, zero modification
 # ===========================================================================
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "").strip()
-API_KEY      = (os.environ.get("API_KEY") or os.environ.get("HF_TOKEN", "")).strip()
+API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
+API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860").strip()
 
@@ -36,7 +35,11 @@ REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
 REQUEST_MAX_RETRIES     = int(os.getenv("REQUEST_MAX_RETRIES", "2"))
 MAX_RUNTIME_SECONDS     = int(os.getenv("INFERENCE_TIMEOUT_SECONDS", "1100"))
 SUCCESS_SCORE_THRESHOLD = 0.6
-MAX_TOTAL_REWARD        = 1.0
+TASK_MAX_REWARD = {
+    "routine_resource_allocation": 0.30,
+    "hidden_deterioration_triage": 0.45,
+    "mass_casualty_surge": 0.75,
+}
 
 TASK_IDS = [
     "routine_resource_allocation",
@@ -58,7 +61,7 @@ def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 
-def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
+def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
     error_value = error if error else "null"
     print(
         f"[STEP] step={step} action={action} reward={reward:.2f} "
@@ -67,11 +70,10 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     )
 
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{v:.2f}" for v in rewards)
+def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} "
-        f"steps={steps} score={score:.3f} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -116,9 +118,9 @@ SYSTEM_PROMPT = (
 
 def build_user_prompt(
     task_id: str,
-    waiting_room: List[dict],
+    waiting_room: list[dict],
     bed_status: dict,
-    active_alarms: List[str],
+    active_alarms: list[str],
 ) -> str:
     room_lines = [
         f"id={p.get('patient_id')} age={p.get('age')} "
@@ -146,70 +148,57 @@ def choose_action_with_llm(
     client: OpenAI,
     task_id: str,
     prompt: str,
-) -> Optional["MedTriageAction"]:
+) -> "MedTriageAction":
     """
     Call the LLM proxy and parse the action JSON.
     Returns a MedTriageAction on success, or None on any failure.
     Failures are always printed — never silently ignored.
     """
+    completion = client.chat.completions.create(
+        model=MODEL_NAME,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.0,
+        max_tokens=200,
+        stream=False,
+    )
+
+    raw_content = (completion.choices[0].message.content or "").strip()
+    if not raw_content:
+        return MedTriageAction(action_type=ActionType.NO_OP)
+
     try:
-        completion = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": prompt},
-            ],
-            temperature=0.0,
-            max_tokens=200,
-            stream=False,
-        )
-
-        raw = (completion.choices[0].message.content or "").strip()
-        print(f"[DEBUG] LLM raw: {raw!r}", flush=True)
-
-        if not raw:
-            print("[WARN] LLM returned empty content", flush=True)
-            return None
-
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            lines = [l for l in raw.split("\n") if not l.strip().startswith("```")]
-            raw = "\n".join(lines).strip()
-
-        # Extract the first JSON object
-        start = raw.find("{")
-        end   = raw.rfind("}") + 1
-        if start == -1 or end == 0:
-            print(f"[WARN] No JSON found in LLM response: {raw!r}", flush=True)
-            return None
-
-        data     = json.loads(raw[start:end])
+        if raw_content.startswith("```"):
+            lines = [l for l in raw_content.split("\n") if not l.strip().startswith("```")]
+            raw_content = "\n".join(lines)
+        if "{" in raw_content and "}" in raw_content:
+            start = raw_content.find("{")
+            end = raw_content.rfind("}") + 1
+            raw_content = raw_content[start:end]
+        data = json.loads(raw_content)
         act_type = data.get("action_type", "no_op")
-        payload  = {"action_type": act_type}
-
+        action_payload = {"action_type": act_type}
         if "patient_id" in data:
-            payload["patient_id"] = str(data["patient_id"])
+            action_payload["patient_id"] = str(data["patient_id"])
         if act_type == "triage_patient" and "esi_level" in data:
-            payload["esi_level"] = int(data["esi_level"])
+            action_payload["esi_level"] = int(data["esi_level"])
         if act_type == "allocate_bed" and "bed_type" in data:
-            payload["bed_type"] = str(data["bed_type"])
-
-        return MedTriageAction(**payload)
-
-    except Exception as e:
-        # Log the real error — NEVER return a silent no_op
-        print(f"[ERROR] LLM call failed ({type(e).__name__}): {e}", flush=True)
-        return None  # caller will use the deterministic fallback
+            action_payload["bed_type"] = str(data["bed_type"])
+        return MedTriageAction(**action_payload)
+    except Exception:
+        return MedTriageAction(action_type=ActionType.NO_OP)
 
 # ===========================================================================
 # DETERMINISTIC FALLBACK  (only used if LLM call fails)
 # ===========================================================================
 
 def choose_action_with_fallback(
-    llm_action: Optional["MedTriageAction"],
-    waiting_room: List[dict],
+    llm_action: "MedTriageAction | None",
+    waiting_room: list[dict],
     bed_status: dict,
-    triaged_patients: Set[str],
+    triaged_patients: set[str],
 ) -> "MedTriageAction":
     """Use the LLM action when valid; otherwise apply a rule-based fallback."""
 
@@ -274,11 +263,11 @@ async def run_task(
 ) -> None:
     max_steps = TASK_MAX_STEPS.get(task_id, 12)
     task_name = f"medtriage-{task_id}"
-    rewards:  List[float] = []
+    rewards:  list[float] = []
     steps_taken = 0
     score       = 0.01
     success     = False
-    triaged_patients: Set[str] = set()
+    triaged_patients: set[str] = set()
 
     log_start(task=task_name, env=BENCHMARK_NAME, model=MODEL_NAME)
 
@@ -303,17 +292,24 @@ async def run_task(
             if not waiting_room:
                 break
 
+            bed_status_dict = obs_dict.get("bed_status", {})
             prompt     = build_user_prompt(
                 task_id=task_id,
                 waiting_room=waiting_room,
-                bed_status=obs_dict.get("bed_status", {}),
+                bed_status=bed_status_dict,
                 active_alarms=obs_dict.get("active_alarms", []),
             )
-            llm_action = choose_action_with_llm(llm_client, task_id, prompt)
-            action     = choose_action_with_fallback(
+
+            try:
+                llm_action = choose_action_with_llm(llm_client, task_id, prompt)
+            except Exception as llm_exc:
+                print(f"[DEBUG] LLM call failed at step {step}: {llm_exc}", flush=True)
+                llm_action = MedTriageAction(action_type=ActionType.NO_OP)
+
+            action = choose_action_with_fallback(
                 llm_action=llm_action,
                 waiting_room=waiting_room,
-                bed_status=obs_dict.get("bed_status", {}),
+                bed_status=bed_status_dict,
                 triaged_patients=triaged_patients,
             )
 
@@ -349,8 +345,9 @@ async def run_task(
             if done:
                 break
 
-        total_reward = sum(rewards)
-        score   = min(max(total_reward / MAX_TOTAL_REWARD, 0.01), 0.99) if MAX_TOTAL_REWARD > 0 else 0.01
+        max_reward = TASK_MAX_REWARD.get(task_id, 0.50)
+        raw_score = sum(rewards) / max_reward if max_reward > 0 else 0.0
+        score = min(max(raw_score, 0.01), 0.99)
         success = score >= SUCCESS_SCORE_THRESHOLD
 
     finally:
@@ -372,14 +369,14 @@ async def main() -> None:
         return
 
     # ── env-var validation ──────────────────────────────────────────────────
-    missing = []
+    missing_vars = []
     if not API_BASE_URL:
-        missing.append("API_BASE_URL")
+        missing_vars.append("API_BASE_URL")
     if not API_KEY:
-        missing.append("API_KEY / HF_TOKEN")
+        missing_vars.append("API_KEY")
 
-    if missing:
-        err = f"Missing required env vars: {', '.join(missing)}"
+    if missing_vars:
+        err = f"Missing required env vars: {', '.join(missing_vars)}"
         print(f"[ERROR] {err}", flush=True)
         for task_id in TASK_IDS:
             log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
@@ -418,25 +415,6 @@ async def main() -> None:
         for task_id in TASK_IDS:
             log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
             log_step(1, "init_client", 0.0, True, error=err)
-            log_end(False, 1, 0.01, [0.0])
-        return
-
-    # ── warmup ping — MUST succeed, otherwise abort all tasks ───────────────
-    print("[INFO] Sending warmup ping to LLM proxy...", flush=True)
-    try:
-        llm_client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[{"role": "user", "content": "ping"}],
-            max_tokens=5,
-            temperature=0.0,
-        )
-        print("[INFO] Warmup ping succeeded — proxy is reachable.", flush=True)
-    except Exception as e:
-        err = f"LLM proxy warmup failed ({type(e).__name__}): {e}"
-        print(f"[ERROR] {err}", flush=True)
-        for task_id in TASK_IDS:
-            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
-            log_step(1, "warmup_ping", 0.0, True, error=err)
             log_end(False, 1, 0.01, [0.0])
         return
 

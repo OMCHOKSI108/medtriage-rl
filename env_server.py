@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from models import Reward, StateResponse, StepRequest, StepResponse
 from src.medtriage.sim import MedTriageSim
@@ -16,15 +17,19 @@ async def global_exception_handler(request: Request, exc: Exception):
 _sim = MedTriageSim()
 
 
+class ResetRequest(BaseModel):
+    task_id: str = "routine_resource_allocation"
+    seed: int = 42
+
+
 @app.post("/reset", response_model=StepResponse)
-def reset(request: Request) -> StepResponse:
-    # Accept Request to handle curl -d '{}' but ignore body
-    observation = _sim.reset()
+def reset(request: ResetRequest) -> StepResponse:
+    observation = _sim.reset(task_id=request.task_id, seed=request.seed)
     return StepResponse(
         observation=observation,
         reward=Reward(value=0.0, components={"reset": 0.0}),
         done=False,
-        info={"status": "initialized"},
+        info={"status": "initialized", "task_id": request.task_id},
     )
 
 

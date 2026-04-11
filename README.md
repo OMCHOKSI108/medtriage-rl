@@ -87,7 +87,8 @@ $$
 See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
 - Routine Resource Allocation
 - Hidden Deterioration Triage
-- Mass Casualty Surge## Repository Layout
+- Mass Casualty Surge
+## Repository Layout
 ```
 .
 ├── env_server.py      # FastAPI server implementation
@@ -102,11 +103,23 @@ See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
 ```
 
 ## Baseline Reproducibility
-The baseline agent uses a heuristic-guided LLM approach. Expected scores (normalized 0.0-1.0):
 
-- **Routine Resource Allocation**: 0.85
-- **Hidden Deterioration Triage**: 0.60
-- **Mass Casualty Surge**: 0.45
+Scores below are approximate. Run with seed=42 for deterministic episodes.
+
+| Task | Difficulty | Max Steps | Baseline Score | Model |
+|------|-----------|-----------|----------------|-------|
+| routine_resource_allocation | easy | 12 | ~0.65 | gpt-4o-mini |
+| hidden_deterioration_triage | medium | 12 | ~0.45 | gpt-4o-mini |
+| mass_casualty_surge | hard | 15 | ~0.30 | gpt-4o-mini |
+
+### Reproducing baseline
+
+```bash
+export API_BASE_URL=https://api.openai.com/v1
+export API_KEY=<your-key>
+export MODEL_NAME=gpt-4o-mini
+python inference.py
+```
 
 ## Deployment
 1. **Containerized Execution**:

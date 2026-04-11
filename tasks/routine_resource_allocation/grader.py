@@ -1,19 +1,14 @@
-from typing import Any
-
-
-def _clamp(score: float) -> float:
-    if score >= 1.0:
-        return 0.99
-    if score <= 0.0:
+def grade(sim_state: dict) -> float:
+    try:
+        triaged = sim_state.get("triaged_count", 0)
+        total = sim_state.get("total_patients", 5)
+        correct_esi = sim_state.get("correct_esi_count", 0)
+        deaths = sim_state.get("preventable_deaths", 0)
+        if total == 0:
+            return 0.01
+        accuracy = correct_esi / total
+        death_penalty = 0.3 * deaths
+        score = accuracy - death_penalty
+        return float(min(max(score, 0.01), 0.99))
+    except Exception:
         return 0.01
-    return score
-
-
-def grade(sample: dict[str, Any], item: dict[str, Any]) -> float:
-    correct_esi = sample.get("correct_esi_count", 0)
-    total_patients = item.get("total_patients", 5)
-    wasted_resources = sample.get("wasted_resources", 0)
-
-    accuracy = correct_esi / max(total_patients, 1)
-    accuracy -= 0.1 * wasted_resources
-    return _clamp(accuracy)
