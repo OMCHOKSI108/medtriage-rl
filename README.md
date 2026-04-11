@@ -127,7 +127,8 @@ python inference.py
    - `docker run -p 7860:7860 medtriage`
 2. **Hugging Face Space**:
    - Tag your Space with `openenv`
-   - Ensure `API_BASE_URL` and `HF_TOKEN` are set in Settings.
+   - For judged submissions, do not hardcode or manually override `API_BASE_URL` / `API_KEY` with your own provider values in Space settings. The evaluator injects those at runtime.
+   - If you test manually, use `API_KEY` (or `HF_TOKEN` as a local fallback), not `OPENAI_API_KEY`.
 
 ## OpenEnv Validation
 The environment is fully compliant with the OpenEnv specification.

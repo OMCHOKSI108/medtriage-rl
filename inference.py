@@ -25,11 +25,11 @@ except Exception as _import_err:
 # CONFIGURATION 
 # ===========================================================================
 
-API_BASE_URL = os.environ.get("API_BASE_URL")
-API_KEY = os.environ.get("API_KEY")
-ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://127.0.0.1:7860")
-
-MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
+API_BASE_URL = ""
+API_KEY = ""
+API_KEY_SOURCE = ""
+ENV_BASE_URL = "http://127.0.0.1:7860"
+MODEL_NAME = "gpt-4o-mini"
 
 BENCHMARK_NAME          = "medtriage-er-simulator"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
@@ -53,6 +53,25 @@ TASK_MAX_STEPS = {
     "hidden_deterioration_triage": 12,
     "mass_casualty_surge":         15,
 }
+
+
+def load_runtime_config() -> None:
+    """Resolve runtime configuration from the active process environment."""
+    global API_BASE_URL, API_KEY, API_KEY_SOURCE, ENV_BASE_URL, MODEL_NAME
+
+    API_BASE_URL = (os.getenv("API_BASE_URL") or "").strip()
+
+    api_key = (os.getenv("API_KEY") or "").strip()
+    hf_token = (os.getenv("HF_TOKEN") or "").strip()
+    API_KEY = api_key or hf_token
+    API_KEY_SOURCE = "API_KEY" if api_key else ("HF_TOKEN" if hf_token else "")
+
+    ENV_BASE_URL = (
+        os.getenv("ENV_BASE_URL")
+        or os.getenv("ENV_SERVER_URL")
+        or "http://127.0.0.1:7860"
+    ).strip()
+    MODEL_NAME = (os.getenv("MODEL_NAME") or "gpt-4o-mini").strip() or "gpt-4o-mini"
 
 # ===========================================================================
 # STRUCTURED LOGGING  (hackathon spec — do NOT change format)
@@ -352,6 +371,7 @@ async def run_task(
 
 async def main() -> None:
     start_time = time.time()
+    load_runtime_config()
 
     if not _IMPORT_OK:
         for task_id in TASK_IDS:
@@ -376,8 +396,11 @@ async def main() -> None:
         return
 
     print(f"[INFO] API_BASE_URL = {API_BASE_URL!r}", flush=True)
-    print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}",   flush=True)
+    print(f"[INFO] API_KEY_SOURCE = {API_KEY_SOURCE or 'missing'!r}", flush=True)
+    print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}", flush=True)
     print(f"[INFO] ENV_BASE_URL = {ENV_BASE_URL!r}", flush=True)
+    if API_KEY_SOURCE == "HF_TOKEN":
+        print("[INFO] Falling back to HF_TOKEN because API_KEY is not set.", flush=True)
 
     print("[INFO] Waiting for env server...", flush=True)
     if not wait_for_server(ENV_BASE_URL):
