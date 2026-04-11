@@ -297,72 +297,72 @@ async def run_task(
             return
 
         for step in range(1, max_steps + 1):
-            if time.time() - start_time >= MAX_RUNTIME_SECONDS:
-                log_step(
-                    step=step, action="timeout_guard",
-                    reward=0.0, done=True, error="runtime limit reached",
+            try:
+                if time.time() - start_time >= MAX_RUNTIME_SECONDS:
+                    log_step(
+                        step=step, action="timeout_guard",
+                        reward=0.0, done=True, error="runtime limit reached",
+                    )
+                    break
+
+                obs_dict     = obs.model_dump() if hasattr(obs, "model_dump") else obs
+                waiting_room = obs_dict.get("waiting_room", [])
+
+                if not waiting_room:
+                    break
+
+                bed_status_dict = obs_dict.get("bed_status", {})
+                prompt     = build_user_prompt(
+                    task_id=task_id,
+                    waiting_room=waiting_room,
+                    bed_status=bed_status_dict,
+                    active_alarms=obs_dict.get("active_alarms", []),
                 )
-                break
 
-            obs_dict     = obs.model_dump() if hasattr(obs, "model_dump") else obs
-            waiting_room = obs_dict.get("waiting_room", [])
+                try:
+                    llm_action = choose_action_with_llm(llm_client, task_id, prompt)
+                except Exception as llm_exc:
+                    # On LLM failure, log the error and use fallback logic with None
+                    print(f"[WARNING] LLM call failed at step {step}: {llm_exc}", flush=True)
+                    llm_action = None
 
-            if not waiting_room:
-                break
+                action = choose_action_with_fallback(
+                    llm_action=llm_action,
+                    waiting_room=waiting_room,
+                    bed_status=bed_status_dict,
+                    triaged_patients=triaged_patients,
+                )
 
-            bed_status_dict = obs_dict.get("bed_status", {})
-            prompt     = build_user_prompt(
-                task_id=task_id,
-                waiting_room=waiting_room,
-                bed_status=bed_status_dict,
-                active_alarms=obs_dict.get("active_alarms", []),
-            )
+                if (
+                    getattr(action, "action_type", None) == "triage_patient"
+                    and getattr(action, "patient_id", None)
+                ):
+                    triaged_patients.add(action.patient_id)
 
-            try:
-                llm_action = choose_action_with_llm(llm_client, task_id, prompt)
-            except Exception as llm_exc:
-                # FIX 2: Crash loudly instead of hiding the error behind a fallback.
-                # If there's an issue with the proxy, we WANT to see this stack trace!
-                print(f"[FATAL ERROR] LLM call failed at step {step}: {llm_exc}", flush=True)
-                raise 
-
-            action = choose_action_with_fallback(
-                llm_action=llm_action,
-                waiting_room=waiting_room,
-                bed_status=bed_status_dict,
-                triaged_patients=triaged_patients,
-            )
-
-            if (
-                getattr(action, "action_type", None) == "triage_patient"
-                and getattr(action, "patient_id", None)
-            ):
-                triaged_patients.add(action.patient_id)
-
-            try:
                 obs, reward_obj, done, info = env.step(action)
-            except Exception as exc:
-                log_step(step=step, action="env.step()", reward=0.0, done=True, error=str(exc))
-                break
 
-            reward_val  = float(getattr(reward_obj, "value", reward_obj) or 0.0)
-            rewards.append(reward_val)
-            steps_taken = step
+                reward_val  = float(getattr(reward_obj, "value", reward_obj) or 0.0)
+                rewards.append(reward_val)
+                steps_taken = step
 
-            action_type = getattr(action, "action_type", "unknown")
-            pid         = getattr(action, "patient_id", None)
-            esi         = getattr(action, "esi_level",  None)
-            bed         = getattr(action, "bed_type",   None)
+                action_type = getattr(action, "action_type", "unknown")
+                pid         = getattr(action, "patient_id", None)
+                esi         = getattr(action, "esi_level",  None)
+                bed         = getattr(action, "bed_type",   None)
 
-            log_step(
-                step=step,
-                action=f"{action_type}(patient_id={pid},esi={esi},bed={bed})",
-                reward=reward_val,
-                done=bool(done),
-                error=None,
-            )
+                log_step(
+                    step=step,
+                    action=f"{action_type}(patient_id={pid},esi={esi},bed={bed})",
+                    reward=reward_val,
+                    done=bool(done),
+                    error=None,
+                )
 
-            if done:
+                if done:
+                    break
+            except Exception as step_exc:
+                print(f"[ERROR] Step {step} failed: {step_exc}", flush=True)
+                log_step(step=step, action="step_error", reward=0.0, done=True, error=str(step_exc))
                 break
 
         max_reward = TASK_MAX_REWARD.get(task_id, 0.50)
