@@ -28,7 +28,7 @@ except Exception as _import_err:
 API_BASE_URL = "https://api.openai.com/v1"
 HF_TOKEN = ""
 ENV_BASE_URL = "http://127.0.0.1:7860"
-MODEL_NAME = "gpt-4o-mini"
+MODEL_NAME = "gpt-4o-mini"  # Reliable model with good performance, use gpt-5.4 if available
 
 BENCHMARK_NAME          = "medtriage-er-simulator"
 REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "30"))
@@ -69,7 +69,7 @@ def load_runtime_config() -> None:
         or os.getenv("ENV_SERVER_URL")
         or "http://127.0.0.1:7860"
     ).strip()
-    MODEL_NAME = (os.getenv("MODEL_NAME") or "gpt-4o-mini").strip() or "gpt-4o-mini"
+    MODEL_NAME = (os.getenv("MODEL_NAME") or "gpt-4o-mini").strip() or "gpt-4o-mini"  # Default to reliable gpt-4o-mini
 
 # ===========================================================================
 # STRUCTURED LOGGING  (hackathon spec — do NOT change format)
