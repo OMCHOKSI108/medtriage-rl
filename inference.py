@@ -25,8 +25,8 @@ except Exception as _import_err:
 # CONFIGURATION — use injected env vars EXACTLY, zero modification
 # ===========================================================================
 
-API_BASE_URL = os.environ.get("API_BASE_URL") or os.environ.get("OPENAI_BASE_URL")
-API_KEY      = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
+API_BASE_URL = os.environ["API_BASE_URL"]
+API_KEY      = os.environ["API_KEY"]
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860").strip()
 
