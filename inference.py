@@ -25,9 +25,9 @@ except Exception as _import_err:
 # CONFIGURATION 
 # ===========================================================================
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
-API_KEY = os.environ.get("HF_TOKEN") or os.environ.get("API_KEY")
-ENV_BASE_URL = os.environ.get("ENV_BASE_URL", os.environ.get("API_BASE_URL", "http://127.0.0.1:7860"))
+API_BASE_URL = os.environ.get("API_BASE_URL")
+API_KEY = os.environ.get("API_KEY")
+ENV_BASE_URL = os.environ.get("ENV_BASE_URL", "http://127.0.0.1:7860")
 
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 
@@ -361,7 +361,8 @@ async def main() -> None:
         return
 
     missing_vars = []
-    # API_BASE_URL check handled at the top of the file
+    if not API_BASE_URL:
+        missing_vars.append("API_BASE_URL")
     if not API_KEY:
         missing_vars.append("API_KEY")
 
