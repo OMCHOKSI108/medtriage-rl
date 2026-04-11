@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import Body, FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -23,7 +23,9 @@ class ResetRequest(BaseModel):
 
 
 @app.post("/reset", response_model=StepResponse)
-def reset(request: ResetRequest) -> StepResponse:
+def reset(request: ResetRequest | None = Body(default=None)) -> StepResponse:
+    if request is None:
+        request = ResetRequest()
     observation = _sim.reset(task_id=request.task_id, seed=request.seed)
     return StepResponse(
         observation=observation,
