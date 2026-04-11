@@ -58,11 +58,13 @@ def load_runtime_config() -> None:
     """Resolve runtime configuration from the active process environment."""
     global API_BASE_URL, API_KEY, ENV_BASE_URL, MODEL_NAME
 
-    API_BASE_URL = (
-        os.getenv("API_BASE_URL")
-        or "https://api.openai.com/v1"
-    ).strip()
-    API_KEY = (os.getenv("API_KEY") or "").strip()
+    API_BASE_URL = os.getenv("API_BASE_URL")
+    if not API_BASE_URL:
+        raise ValueError("API_BASE_URL environment variable is required for competition submissions")
+
+    API_KEY = os.getenv("API_KEY")
+    if not API_KEY:
+        raise ValueError("API_KEY environment variable is required for competition submissions")
 
     ENV_BASE_URL = (
         os.getenv("ENV_BASE_URL")
@@ -369,7 +371,17 @@ async def run_task(
 
 async def main() -> None:
     start_time = time.time()
-    load_runtime_config()
+    
+    try:
+        load_runtime_config()
+    except ValueError as e:
+        err = str(e)
+        print(f"[ERROR] {err}", flush=True)
+        for task_id in TASK_IDS:
+            log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
+            log_step(1, "config", 0.0, True, error=err)
+            log_end(False, 1, 0.01, [0.0])
+        return
 
     if not _IMPORT_OK:
         for task_id in TASK_IDS:
@@ -379,6 +391,8 @@ async def main() -> None:
         return
 
     missing_vars = []
+    if not API_BASE_URL:
+        missing_vars.append("API_BASE_URL")
     if not API_KEY:
         missing_vars.append("API_KEY")
 
@@ -395,12 +409,6 @@ async def main() -> None:
     print(f"[INFO] API_KEY_PRESENT = {str(bool(API_KEY)).lower()}", flush=True)
     print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}", flush=True)
     print(f"[INFO] ENV_BASE_URL = {ENV_BASE_URL!r}", flush=True)
-    if API_BASE_URL.startswith("https://api.openai.com") or API_BASE_URL.startswith("https://router.huggingface.co"):
-        print(
-            "[WARNING] API_BASE_URL points to a public endpoint. "
-            "For judged submissions this usually means the evaluator proxy env var is being overridden.",
-            flush=True,
-        )
 
     print("[INFO] Waiting for env server...", flush=True)
     if not wait_for_server(ENV_BASE_URL):

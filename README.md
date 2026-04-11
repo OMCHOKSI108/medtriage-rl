@@ -90,16 +90,24 @@ See [openenv.yaml](openenv.yaml) for the required task metadata. Tasks included:
 - Mass Casualty Surge
 ## Environment Variables (Competition)
 
-For HF Space deployment and competition submission, the following environment variables are required:
+**Required for competition submissions:**
 
-| Variable | Description | Example |
+| Variable | Description | Status |
 |----------|-------------|---------|
-| `API_BASE_URL` | LiteLLM proxy URL (injected by competition) | `https://litellm-proxy.com/v1` |
-| `API_KEY` | API key for the proxy (injected by competition) | `sk-...` |
-| `MODEL_NAME` | Model to use (optional, defaults to gpt-4o-mini) | `gpt-4o-mini` |
-| `ENV_BASE_URL` | Environment server URL | `http://127.0.0.1:7860` |
+| `API_BASE_URL` | **REQUIRED** - LiteLLM proxy URL injected by competition | Must be set |
+| `API_KEY` | **REQUIRED** - API key for proxy injected by competition | Must be set |
+| `MODEL_NAME` | Model to use (optional, defaults to gpt-4o-mini) | Optional |
+| `ENV_BASE_URL` | Environment server URL | Optional |
 
-**Important**: The competition injects `API_BASE_URL` and `API_KEY`. Do not hardcode your own OpenAI credentials - the submission will fail validation if it doesn't use the provided proxy.
+**Important:** The script will **fail** if `API_BASE_URL` or `API_KEY` are not set. This ensures proper use of the competition's LiteLLM proxy.
+
+**For local development:**
+```bash
+export API_BASE_URL="https://api.openai.com/v1"
+export API_KEY="your-openai-api-key"
+export MODEL_NAME="gpt-4o-mini"
+python inference.py
+```
 
 ## Repository Layout
 ```
