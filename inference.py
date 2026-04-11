@@ -22,15 +22,23 @@ except Exception as _import_err:
     _IMPORT_ERROR = str(_import_err)
 
 # ===========================================================================
-# CONFIGURATION — use injected env vars EXACTLY, zero modification
+# CONFIGURATION 
 # ===========================================================================
 
-API_BASE_URL = os.environ["API_BASE_URL"]
+# FIX 1: Safely format the injected API_BASE_URL for the OpenAI SDK
+raw_url = os.environ["API_BASE_URL"].strip()
+if not raw_url.startswith("http"):
+    raw_url = f"http://{raw_url}"
+if not raw_url.endswith("/v1") and not raw_url.endswith("/v1/"):
+    raw_url = f"{raw_url.rstrip('/')}/v1"
+API_BASE_URL = raw_url
+
 API_KEY = os.environ.get("API_KEY")
 if not API_KEY:
     API_KEY = os.environ.get("HF_TOKEN")
     if API_KEY:
         print("[WARN] API_KEY not set, falling back to HF_TOKEN", flush=True)
+
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o-mini").strip() or "gpt-4o-mini"
 ENV_BASE_URL = os.environ.get("ENV_SERVER_URL", "http://127.0.0.1:7860").strip()
 
@@ -64,7 +72,6 @@ TASK_MAX_STEPS = {
 def log_start(task: str, env: str, model: str) -> None:
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
-
 def log_step(step: int, action: str, reward: float, done: bool, error: str | None) -> None:
     error_value = error if error else "null"
     print(
@@ -72,7 +79,6 @@ def log_step(step: int, action: str, reward: float, done: bool, error: str | Non
         f"done={str(done).lower()} error={error_value}",
         flush=True,
     )
-
 
 def log_end(success: bool, steps: int, score: float, rewards: list[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
@@ -119,7 +125,6 @@ SYSTEM_PROMPT = (
     '  {"action_type": "allocate_bed",   "patient_id": "p1", "bed_type": "icu"}\n'
 )
 
-
 def build_user_prompt(
     task_id: str,
     waiting_room: list[dict],
@@ -145,7 +150,7 @@ def build_user_prompt(
     )
 
 # ===========================================================================
-# LLM CALL  — failures are LOGGED and returned as None, never swallowed
+# LLM CALL  
 # ===========================================================================
 
 def choose_action_with_llm(
@@ -153,11 +158,6 @@ def choose_action_with_llm(
     task_id: str,
     prompt: str,
 ) -> "MedTriageAction":
-    """
-    Call the LLM proxy and parse the action JSON.
-    Returns a MedTriageAction on success, or None on any failure.
-    Failures are always printed — never silently ignored.
-    """
     completion = client.chat.completions.create(
         model=MODEL_NAME,
         messages=[
@@ -195,7 +195,7 @@ def choose_action_with_llm(
         return MedTriageAction(action_type=ActionType.NO_OP)
 
 # ===========================================================================
-# DETERMINISTIC FALLBACK  (only used if LLM call fails)
+# DETERMINISTIC FALLBACK 
 # ===========================================================================
 
 def choose_action_with_fallback(
@@ -204,8 +204,6 @@ def choose_action_with_fallback(
     bed_status: dict,
     triaged_patients: set[str],
 ) -> "MedTriageAction":
-    """Use the LLM action when valid; otherwise apply a rule-based fallback."""
-
     # Accept a valid LLM action
     if (
         llm_action is not None
@@ -307,8 +305,10 @@ async def run_task(
             try:
                 llm_action = choose_action_with_llm(llm_client, task_id, prompt)
             except Exception as llm_exc:
-                print(f"[DEBUG] LLM call failed at step {step}: {llm_exc}", flush=True)
-                llm_action = MedTriageAction(action_type=ActionType.NO_OP)
+                # FIX 2: Crash loudly instead of hiding the error behind a fallback.
+                # If there's an issue with the proxy, we WANT to see this stack trace!
+                print(f"[FATAL ERROR] LLM call failed at step {step}: {llm_exc}", flush=True)
+                raise 
 
             action = choose_action_with_fallback(
                 llm_action=llm_action,
@@ -364,7 +364,6 @@ async def run_task(
 async def main() -> None:
     start_time = time.time()
 
-    # ── import check ────────────────────────────────────────────────────────
     if not _IMPORT_OK:
         for task_id in TASK_IDS:
             log_start(task=f"medtriage-{task_id}", env=BENCHMARK_NAME, model=MODEL_NAME)
@@ -372,10 +371,8 @@ async def main() -> None:
             log_end(False, 1, 0.01, [0.01])
         return
 
-    # ── env-var validation ──────────────────────────────────────────────────
     missing_vars = []
-    if not API_BASE_URL:
-        missing_vars.append("API_BASE_URL")
+    # API_BASE_URL check handled at the top of the file
     if not API_KEY:
         missing_vars.append("API_KEY")
 
@@ -388,12 +385,10 @@ async def main() -> None:
             log_end(False, 1, 0.01, [0.0])
         return
 
-    # ── log exactly what we're using ────────────────────────────────────────
     print(f"[INFO] API_BASE_URL = {API_BASE_URL!r}", flush=True)
     print(f"[INFO] MODEL_NAME   = {MODEL_NAME!r}",   flush=True)
     print(f"[INFO] ENV_BASE_URL = {ENV_BASE_URL!r}", flush=True)
 
-    # ── wait for the RL environment server ──────────────────────────────────
     print("[INFO] Waiting for env server...", flush=True)
     if not wait_for_server(ENV_BASE_URL):
         err = f"Env server at {ENV_BASE_URL} never became ready"
@@ -405,10 +400,9 @@ async def main() -> None:
         return
     print("[INFO] Env server is ready.", flush=True)
 
-    # ── create OpenAI client — API_BASE_URL used EXACTLY as injected ────────
     try:
         llm_client = OpenAI(
-            base_url=API_BASE_URL,   # NO modification, NO http:// prepend
+            base_url=API_BASE_URL, 
             api_key=API_KEY,
             timeout=REQUEST_TIMEOUT_SECONDS,
             max_retries=REQUEST_MAX_RETRIES,
@@ -422,7 +416,6 @@ async def main() -> None:
             log_end(False, 1, 0.01, [0.0])
         return
 
-    # ── create env client ────────────────────────────────────────────────────
     try:
         env = MedTriageEnv(base_url=ENV_BASE_URL)
     except Exception as e:
@@ -434,7 +427,6 @@ async def main() -> None:
             log_end(False, 1, 0.01, [0.0])
         return
 
-    # ── run all tasks sequentially ───────────────────────────────────────────
     for task_id in TASK_IDS:
         if time.time() - start_time >= MAX_RUNTIME_SECONDS:
             break
