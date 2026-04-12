@@ -176,9 +176,3 @@ Default app port: 7860
 docker build -t medtriage .
 docker run -p 7860:7860 medtriage
 ```
-
-## Validation
-
-Recommended pre-submission checks:
-- openenv validate
-- ./validation.sh <your-space-url>
